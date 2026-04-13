@@ -198,7 +198,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const user = await requireUserFromRequest(request);
-    await assertPermission(user, "stock", "add");
+    await assertPermission(user, "stock", "edit");
 
     const body = await request.json().catch(() => {
       throw new ApiError(400, "Invalid JSON body");

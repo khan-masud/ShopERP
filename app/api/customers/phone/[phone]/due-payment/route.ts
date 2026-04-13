@@ -46,7 +46,7 @@ export async function POST(
 ) {
   try {
     const user = await requireUserFromRequest(request);
-    await assertPermission(user, "customers", "add");
+    await assertPermission(user, "customers", "edit");
 
     const resolvedParams = await params;
     const phone = decodePhone(resolvedParams.phone);

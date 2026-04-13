@@ -42,7 +42,7 @@ export async function POST(
 ) {
   try {
     const user = await requireUserFromRequest(request);
-    await assertPermission(user, "sales", "add");
+    await assertPermission(user, "sales", "edit");
 
     const resolvedParams = await params;
     const saleId = parseSaleId(decodeURIComponent(resolvedParams.saleId));

@@ -6,11 +6,6 @@ type ApiSuccess<T> = {
   data: T;
 };
 
-type ApiErrorPayload = {
-  success: false;
-  message?: string;
-};
-
 type ExpenseResponse = {
   expense: {
     id: string;
@@ -162,7 +157,7 @@ class ApiSession {
 function assertApiSuccess<T>(payload: unknown, context: string): asserts payload is ApiSuccess<T> {
   assert.ok(payload && typeof payload === "object", `${context} should be JSON object`);
 
-  const maybePayload = payload as Partial<ApiSuccess<T> & ApiErrorPayload>;
+  const maybePayload = payload as { success?: boolean; message?: string };
   assert.equal(
     maybePayload.success,
     true,

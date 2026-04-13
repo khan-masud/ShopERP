@@ -8,7 +8,7 @@ Security-first ERP for Bangladesh single-owner retail shops.
 - TypeScript
 - MySQL (mysql2 driver)
 - JWT auth with httpOnly cookies (access + refresh)
-- RBAC permission matrix (admin/staff with module-level view/add/delete)
+- RBAC permission matrix (admin/staff with module-level view/add/edit/delete)
 - React Query + Zustand + Tailwind
 
 ## Quick Start
@@ -68,6 +68,7 @@ Open http://localhost:3000
 - /expenses
 - /stock
 - /audit
+- /staff-summary (admin)
 - /users (admin)
 - /permissions (admin)
 
@@ -103,6 +104,8 @@ Open http://localhost:3000
 	- POST /api/stock
 - Audit:
 	- GET /api/audit
+- Staff Summary (admin):
+	- GET /api/staff-summary
 - Permissions (admin):
 	- GET /api/permissions
 	- PUT /api/permissions

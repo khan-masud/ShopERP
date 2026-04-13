@@ -21,12 +21,25 @@ type PermissionItem = {
   module_key: ModuleKey;
   can_view: boolean;
   can_add: boolean;
+  can_edit: boolean;
   can_delete: boolean;
 };
+
+type ModuleActionSupport = {
+  can_view: boolean;
+  can_add: boolean;
+  can_edit: boolean;
+  can_delete: boolean;
+};
+
+type ActionField = "can_view" | "can_add" | "can_edit" | "can_delete";
+
+type ActionSupportMap = Record<ModuleKey, ModuleActionSupport>;
 
 type PermissionsResponse = {
   role: "staff";
   modules: ModuleKey[];
+  action_support: ActionSupportMap;
   permissions: PermissionItem[];
 };
 
@@ -50,6 +63,18 @@ const moduleLabelMap: Record<ModuleKey, string> = {
   audit: "Audit Logs",
   stock: "Stock",
   permissions: "Permissions",
+};
+
+const defaultActionSupport: ActionSupportMap = {
+  dashboard: { can_view: true, can_add: false, can_edit: false, can_delete: false },
+  products: { can_view: true, can_add: true, can_edit: false, can_delete: false },
+  customers: { can_view: true, can_add: false, can_edit: true, can_delete: false },
+  sales: { can_view: true, can_add: true, can_edit: true, can_delete: false },
+  reports: { can_view: true, can_add: false, can_edit: false, can_delete: false },
+  expenses: { can_view: true, can_add: true, can_edit: false, can_delete: true },
+  audit: { can_view: true, can_add: false, can_edit: false, can_delete: false },
+  stock: { can_view: true, can_add: false, can_edit: true, can_delete: false },
+  permissions: { can_view: false, can_add: false, can_edit: false, can_delete: false },
 };
 
 async function fetchPermissions() {
@@ -103,6 +128,16 @@ export default function PermissionsPage() {
     [data],
   );
 
+  const actionSupport = data?.action_support ?? defaultActionSupport;
+
+  function isActionSupported(moduleKey: ModuleKey, field: ActionField) {
+    return actionSupport[moduleKey]?.[field] ?? false;
+  }
+
+  function hasAnyActionSupport(field: ActionField) {
+    return Object.values(actionSupport).some((item) => item[field]);
+  }
+
   const [draftPermissions, setDraftPermissions] = useState<PermissionItem[] | null>(null);
   const permissions = draftPermissions ?? originalPermissions;
 
@@ -142,7 +177,7 @@ export default function PermissionsPage() {
     },
   });
 
-  function setField(moduleKey: ModuleKey, field: "can_view" | "can_add" | "can_delete", value: boolean) {
+  function setField(moduleKey: ModuleKey, field: ActionField, value: boolean) {
     setDraftPermissions((prev) => {
       const source = prev ?? originalPermissions;
 
@@ -151,12 +186,20 @@ export default function PermissionsPage() {
           return item;
         }
 
+        if (!isActionSupported(moduleKey, field)) {
+          return {
+            ...item,
+            [field]: false,
+          };
+        }
+
         if (field === "can_view") {
           if (!value) {
             return {
               ...item,
               can_view: false,
               can_add: false,
+              can_edit: false,
               can_delete: false,
             };
           }
@@ -170,7 +213,7 @@ export default function PermissionsPage() {
         if (value) {
           return {
             ...item,
-            can_view: true,
+            can_view: isActionSupported(moduleKey, "can_view") ? true : false,
             [field]: true,
           };
         }
@@ -183,17 +226,25 @@ export default function PermissionsPage() {
     });
   }
 
-  function setColumn(field: "can_view" | "can_add" | "can_delete", value: boolean) {
+  function setColumn(field: ActionField, value: boolean) {
     setDraftPermissions((prev) => {
       const source = prev ?? originalPermissions;
 
       return source.map((item) => {
+        if (!isActionSupported(item.module_key, field)) {
+          return {
+            ...item,
+            [field]: false,
+          };
+        }
+
         if (field === "can_view") {
           if (!value) {
             return {
               ...item,
               can_view: false,
               can_add: false,
+              can_edit: false,
               can_delete: false,
             };
           }
@@ -207,7 +258,7 @@ export default function PermissionsPage() {
         if (value) {
           return {
             ...item,
-            can_view: true,
+            can_view: isActionSupported(item.module_key, "can_view") ? true : false,
             [field]: true,
           };
         }
@@ -224,7 +275,7 @@ export default function PermissionsPage() {
     <div className="space-y-5">
       <div>
         <h2 className="text-2xl font-semibold text-slate-900">Permission Management</h2>
-        <p className="text-sm text-slate-500">Configure staff view/add/delete access for each module</p>
+        <p className="text-sm text-slate-500">Configure staff view/add/edit/delete access for each module</p>
       </div>
 
       <Card className="p-4 text-sm text-slate-700">
@@ -245,13 +296,36 @@ export default function PermissionsPage() {
             <h3 className="text-sm font-semibold text-slate-900">Staff Permissions Matrix</h3>
 
             <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" variant="ghost" onClick={() => setColumn("can_view", true)}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setColumn("can_view", true)}
+                disabled={!hasAnyActionSupport("can_view")}
+              >
                 Grant All View
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setColumn("can_add", true)}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setColumn("can_add", true)}
+                disabled={!hasAnyActionSupport("can_add")}
+              >
                 Grant All Add
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setColumn("can_delete", true)}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setColumn("can_edit", true)}
+                disabled={!hasAnyActionSupport("can_edit")}
+              >
+                Grant All Edit
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setColumn("can_delete", true)}
+                disabled={!hasAnyActionSupport("can_delete")}
+              >
                 Grant All Delete
               </Button>
               <Button
@@ -279,13 +353,14 @@ export default function PermissionsPage() {
                   <th className="px-4 py-2 text-left">Module</th>
                   <th className="px-4 py-2 text-center">View</th>
                   <th className="px-4 py-2 text-center">Add</th>
+                  <th className="px-4 py-2 text-center">Edit</th>
                   <th className="px-4 py-2 text-center">Delete</th>
                 </tr>
               </thead>
               <tbody>
                 {permissions.length === 0 ? (
                   <tr>
-                    <td className="px-4 py-8 text-center text-slate-500" colSpan={4}>
+                    <td className="px-4 py-8 text-center text-slate-500" colSpan={5}>
                       No permission records found
                     </td>
                   </tr>
@@ -296,28 +371,52 @@ export default function PermissionsPage() {
                         {moduleLabelMap[item.module_key] ?? item.module_key}
                       </td>
                       <td className="px-4 py-2 text-center">
-                        <input
-                          type="checkbox"
-                          checked={item.can_view}
-                          onChange={(event) => setField(item.module_key, "can_view", event.target.checked)}
-                          className="h-4 w-4 rounded border-slate-300 text-blue-600"
-                        />
+                        {isActionSupported(item.module_key, "can_view") ? (
+                          <input
+                            type="checkbox"
+                            checked={item.can_view}
+                            onChange={(event) => setField(item.module_key, "can_view", event.target.checked)}
+                            className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                          />
+                        ) : (
+                          <span className="text-xs text-slate-400">N/A</span>
+                        )}
                       </td>
                       <td className="px-4 py-2 text-center">
-                        <input
-                          type="checkbox"
-                          checked={item.can_add}
-                          onChange={(event) => setField(item.module_key, "can_add", event.target.checked)}
-                          className="h-4 w-4 rounded border-slate-300 text-blue-600"
-                        />
+                        {isActionSupported(item.module_key, "can_add") ? (
+                          <input
+                            type="checkbox"
+                            checked={item.can_add}
+                            onChange={(event) => setField(item.module_key, "can_add", event.target.checked)}
+                            className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                          />
+                        ) : (
+                          <span className="text-xs text-slate-400">N/A</span>
+                        )}
                       </td>
                       <td className="px-4 py-2 text-center">
-                        <input
-                          type="checkbox"
-                          checked={item.can_delete}
-                          onChange={(event) => setField(item.module_key, "can_delete", event.target.checked)}
-                          className="h-4 w-4 rounded border-slate-300 text-blue-600"
-                        />
+                        {isActionSupported(item.module_key, "can_edit") ? (
+                          <input
+                            type="checkbox"
+                            checked={item.can_edit}
+                            onChange={(event) => setField(item.module_key, "can_edit", event.target.checked)}
+                            className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                          />
+                        ) : (
+                          <span className="text-xs text-slate-400">N/A</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 text-center">
+                        {isActionSupported(item.module_key, "can_delete") ? (
+                          <input
+                            type="checkbox"
+                            checked={item.can_delete}
+                            onChange={(event) => setField(item.module_key, "can_delete", event.target.checked)}
+                            className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                          />
+                        ) : (
+                          <span className="text-xs text-slate-400">N/A</span>
+                        )}
                       </td>
                     </tr>
                   ))

@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS role_permissions (
   module_key VARCHAR(80) NOT NULL,
   can_view TINYINT(1) NOT NULL DEFAULT 0,
   can_add TINYINT(1) NOT NULL DEFAULT 0,
+  can_edit TINYINT(1) NOT NULL DEFAULT 0,
   can_delete TINYINT(1) NOT NULL DEFAULT 0,
   UNIQUE KEY uniq_role_module (role, module_key)
 ) ENGINE=InnoDB;
@@ -177,18 +178,37 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   INDEX idx_audit_logs_action (action)
 ) ENGINE=InnoDB;
 
-INSERT INTO role_permissions (role, module_key, can_view, can_add, can_delete)
+SET @role_permissions_can_edit_exists := (
+  SELECT COUNT(*)
+  FROM INFORMATION_SCHEMA.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'role_permissions'
+    AND COLUMN_NAME = 'can_edit'
+);
+
+SET @role_permissions_can_edit_sql := IF(
+  @role_permissions_can_edit_exists = 0,
+  'ALTER TABLE role_permissions ADD COLUMN can_edit TINYINT(1) NOT NULL DEFAULT 0 AFTER can_add',
+  'SELECT 1'
+);
+
+PREPARE role_permissions_can_edit_stmt FROM @role_permissions_can_edit_sql;
+EXECUTE role_permissions_can_edit_stmt;
+DEALLOCATE PREPARE role_permissions_can_edit_stmt;
+
+INSERT INTO role_permissions (role, module_key, can_view, can_add, can_edit, can_delete)
 VALUES
-('staff', 'dashboard', 1, 0, 0),
-('staff', 'products', 1, 0, 0),
-('staff', 'customers', 1, 1, 0),
-('staff', 'sales', 1, 1, 0),
-('staff', 'reports', 0, 0, 0),
-('staff', 'expenses', 0, 0, 0),
-('staff', 'audit', 0, 0, 0),
-('staff', 'stock', 1, 1, 0),
-('staff', 'permissions', 0, 0, 0)
+('staff', 'dashboard', 1, 0, 0, 0),
+('staff', 'products', 1, 0, 0, 0),
+('staff', 'customers', 1, 0, 1, 0),
+('staff', 'sales', 1, 1, 1, 0),
+('staff', 'reports', 0, 0, 0, 0),
+('staff', 'expenses', 0, 0, 0, 0),
+('staff', 'audit', 0, 0, 0, 0),
+('staff', 'stock', 1, 0, 1, 0),
+('staff', 'permissions', 0, 0, 0, 0)
 ON DUPLICATE KEY UPDATE
   can_view = VALUES(can_view),
   can_add = VALUES(can_add),
+  can_edit = VALUES(can_edit),
   can_delete = VALUES(can_delete);
