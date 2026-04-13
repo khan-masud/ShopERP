@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/Input";
 import { StatCard } from "@/components/ui/StatCard";
 import { formatDateTime, formatTaka } from "@/lib/utils";
 
+type StockStatusFilter = "all" | "low_stock" | "out_of_stock";
+
 type StockProduct = {
   id: string;
   name: string;
@@ -51,6 +53,8 @@ type StockResponse = {
   summary: {
     total_products: number;
     low_stock_count: number;
+    out_of_stock_count: number;
+    total_stock: number;
   };
 };
 
@@ -66,7 +70,8 @@ type ApiErrorPayload = {
 
 async function fetchStock(
   search: string,
-  lowOnly: boolean,
+  stockStatus: StockStatusFilter,
+  selectedProductId: string,
   productPage: number,
   productPageSize: number,
   historyPage: number,
@@ -78,8 +83,12 @@ async function fetchStock(
     params.set("q", search.trim());
   }
 
-  if (lowOnly) {
-    params.set("lowOnly", "1");
+  if (stockStatus !== "all") {
+    params.set("stockStatus", stockStatus);
+  }
+
+  if (selectedProductId) {
+    params.set("productId", selectedProductId);
   }
 
   params.set("page", String(productPage));
@@ -106,7 +115,8 @@ export default function StockPage() {
   const queryClient = useQueryClient();
 
   const [search, setSearch] = useState("");
-  const [lowOnly, setLowOnly] = useState(false);
+  const [productLookup, setProductLookup] = useState("");
+  const [stockStatus, setStockStatus] = useState<StockStatusFilter>("all");
   const [productPage, setProductPage] = useState(1);
   const [productPageSize, setProductPageSize] = useState(50);
   const [historyPage, setHistoryPage] = useState(1);
@@ -115,6 +125,7 @@ export default function StockPage() {
   const [changeType, setChangeType] = useState<"restock" | "adjustment">("restock");
   const [quantityChange, setQuantityChange] = useState("");
   const [note, setNote] = useState("");
+  const [showApplyConfirm, setShowApplyConfirm] = useState(false);
 
   const {
     data,
@@ -124,14 +135,23 @@ export default function StockPage() {
     queryKey: [
       "stock-module",
       search,
-      lowOnly,
+      stockStatus,
+      selectedProductId,
       productPage,
       productPageSize,
       historyPage,
       historyPageSize,
     ],
     queryFn: () =>
-      fetchStock(search, lowOnly, productPage, productPageSize, historyPage, historyPageSize),
+      fetchStock(
+        search,
+        stockStatus,
+        selectedProductId,
+        productPage,
+        productPageSize,
+        historyPage,
+        historyPageSize,
+      ),
   });
 
   const products = useMemo(() => data?.products ?? [], [data]);
@@ -163,20 +183,83 @@ export default function StockPage() {
     historyTotalCount === 0
       ? 0
       : Math.min(historyPagination.page * historyPagination.page_size, historyTotalCount);
-  const summary = data?.summary ?? { total_products: 0, low_stock_count: 0 };
+  const summary = data?.summary ?? {
+    total_products: 0,
+    low_stock_count: 0,
+    out_of_stock_count: 0,
+    total_stock: 0,
+  };
+
+  const matchedProductIdFromLookup = useMemo(() => {
+    const lookup = productLookup.trim().toLowerCase();
+
+    if (!lookup) {
+      return "";
+    }
+
+    const bySku = products.find((item) => item.sku.toLowerCase() === lookup);
+    if (bySku) {
+      return bySku.id;
+    }
+
+    const byName = products.find((item) => item.name.toLowerCase() === lookup);
+    return byName?.id ?? "";
+  }, [products, productLookup]);
 
   const activeProductId = useMemo(() => {
     if (selectedProductId && products.some((item) => item.id === selectedProductId)) {
       return selectedProductId;
     }
 
-    return products[0]?.id ?? "";
-  }, [products, selectedProductId]);
+    return matchedProductIdFromLookup;
+  }, [products, matchedProductIdFromLookup, selectedProductId]);
 
   const activeProduct = useMemo(
     () => products.find((item) => item.id === activeProductId) ?? null,
     [products, activeProductId],
   );
+
+  const productPickerOptions = useMemo(
+    () =>
+      products.map((item) => ({
+        id: item.id,
+        value: item.name,
+        label: `${item.name} | Stock ${item.stock}`,
+      })),
+    [products],
+  );
+
+  function applyStockStatusFilter(nextStatus: StockStatusFilter) {
+    setStockStatus(nextStatus);
+    setProductPage(1);
+  }
+
+  function getValidatedQuantityChange() {
+    const parsedQuantity = Number(quantityChange);
+
+    if (!Number.isInteger(parsedQuantity) || parsedQuantity === 0) {
+      throw new Error("Quantity change must be a non-zero integer");
+    }
+
+    if (changeType === "restock" && parsedQuantity < 0) {
+      throw new Error("Restock quantity must be positive");
+    }
+
+    return parsedQuantity;
+  }
+
+  function handleApplyClick() {
+    try {
+      if (!activeProductId) {
+        throw new Error("Select a product for stock adjustment");
+      }
+
+      getValidatedQuantityChange();
+      setShowApplyConfirm(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Invalid stock change request");
+    }
+  }
 
   const adjustMutation = useMutation({
     mutationFn: async () => {
@@ -184,15 +267,7 @@ export default function StockPage() {
         throw new Error("Select a product for stock adjustment");
       }
 
-      const parsedQuantity = Number(quantityChange);
-
-      if (!Number.isInteger(parsedQuantity) || parsedQuantity === 0) {
-        throw new Error("Quantity change must be a non-zero integer");
-      }
-
-      if (changeType === "restock" && parsedQuantity < 0) {
-        throw new Error("Restock quantity must be positive");
-      }
+      const parsedQuantity = getValidatedQuantityChange();
 
       const res = await fetch("/api/stock", {
         method: "POST",
@@ -217,6 +292,7 @@ export default function StockPage() {
       toast.success("Stock updated");
       setQuantityChange("");
       setNote("");
+      setShowApplyConfirm(false);
 
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["stock-module"] }),
@@ -230,86 +306,86 @@ export default function StockPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="text-2xl font-semibold text-slate-900">Stock Adjustment</h2>
-        <p className="text-sm text-slate-500">Manage manual stock corrections and maintain an auditable inventory timeline</p>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        <StatCard title="Active Products" value={String(summary.total_products)} accent="blue" />
-        <StatCard title="Low Stock Items" value={String(summary.low_stock_count)} accent="orange" />
-        <StatCard
-          title="Selected Product"
-          value={activeProduct ? `${activeProduct.name} (${activeProduct.stock})` : "N/A"}
-          accent="green"
-        />
-      </div>
-
-      <Card className="p-4">
-        <div className="grid gap-3 md:grid-cols-3">
-          <Input
-            label="Search Product"
-            placeholder="Name or SKU"
-            value={search}
-            onChange={(event) => {
-              setSearch(event.target.value);
-              setProductPage(1);
-              setHistoryPage(1);
-            }}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <button
+          type="button"
+          onClick={() => applyStockStatusFilter("all")}
+          className="rounded-xl text-left transition hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+          aria-pressed={stockStatus === "all"}
+          title="Show all products"
+        >
+          <StatCard
+            title="Total Products"
+            value={String(summary.total_products)}
+            accent="blue"
+            hint={stockStatus === "all" ? "Filter active" : "Click to filter"}
           />
-
-          <label className="flex items-end gap-2 pb-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              checked={lowOnly}
-              onChange={(event) => {
-                setLowOnly(event.target.checked);
-                setProductPage(1);
-                setHistoryPage(1);
-              }}
-              className="h-4 w-4 rounded border-slate-300 text-blue-600"
-            />
-            Show only low stock
-          </label>
-
-          <div className="flex items-end justify-end">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setSearch("");
-                setLowOnly(false);
-                setProductPage(1);
-                setHistoryPage(1);
-              }}
-            >
-              Clear Filters
-            </Button>
-          </div>
-        </div>
-      </Card>
+        </button>
+        <button
+          type="button"
+          onClick={() => applyStockStatusFilter("low_stock")}
+          className="rounded-xl text-left transition hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2"
+          aria-pressed={stockStatus === "low_stock"}
+          title="Show low stock products"
+        >
+          <StatCard
+            title="Low Stock"
+            value={String(summary.low_stock_count)}
+            accent="orange"
+            hint={stockStatus === "low_stock" ? "Filter active" : "Click to filter"}
+          />
+        </button>
+        <button
+          type="button"
+          onClick={() => applyStockStatusFilter("out_of_stock")}
+          className="rounded-xl text-left transition hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
+          aria-pressed={stockStatus === "out_of_stock"}
+          title="Show out of stock products"
+        >
+          <StatCard
+            title="Out of Stock"
+            value={String(summary.out_of_stock_count)}
+            accent="red"
+            hint={stockStatus === "out_of_stock" ? "Filter active" : "Click to filter"}
+          />
+        </button>
+        <StatCard title="Total Stock" value={String(summary.total_stock)} accent="green" />
+      </div>
 
       <Card className="p-4">
         <h3 className="text-sm font-semibold text-slate-900">Apply Stock Change</h3>
 
-        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-          <label className="flex flex-col gap-1.5 xl:col-span-2">
-            <span className="text-xs font-medium text-slate-600">Product</span>
-            <select
-              className="h-10 rounded-lg border border-slate-300 px-3 text-sm"
-              value={activeProductId}
-              onChange={(event) => setSelectedProductId(event.target.value)}
-            >
-              {products.length === 0 ? <option value="">No products available</option> : null}
-              {products.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name} ({item.sku}) | Stock {item.stock}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-12">
+          <div className="xl:col-span-5">
+            <Input
+              label="Product (Search + Select)"
+              placeholder="Type product name or SKU and select from dropdown"
+              value={productLookup}
+              list="stock-product-picker"
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                setProductLookup(nextValue);
+                setSearch(nextValue);
+                setProductPage(1);
+                setHistoryPage(1);
 
-          <label className="flex flex-col gap-1.5">
+                const lookup = nextValue.trim().toLowerCase();
+                const matched = products.find(
+                  (item) => item.sku.toLowerCase() === lookup || item.name.toLowerCase() === lookup,
+                );
+
+                setSelectedProductId(matched?.id ?? "");
+              }}
+            />
+          </div>
+
+          <datalist id="stock-product-picker">
+            {productPickerOptions.map((item) => (
+              <option key={item.id} value={item.value} label={item.label} />
+            ))}
+          </datalist>
+
+          <label className="flex flex-col gap-1.5 xl:col-span-2">
             <span className="text-xs font-medium text-slate-600">Change Type</span>
             <select
               className="h-10 rounded-lg border border-slate-300 px-3 text-sm"
@@ -321,30 +397,69 @@ export default function StockPage() {
             </select>
           </label>
 
-          <Input
-            label="Quantity Change"
-            type="number"
-            step="1"
-            value={quantityChange}
-            onChange={(event) => setQuantityChange(event.target.value)}
-            placeholder={changeType === "restock" ? "e.g. 10" : "e.g. -2 or 5"}
-          />
+          <div className="xl:col-span-2">
+            <Input
+              label="Quantity Change"
+              type="number"
+              step="1"
+              value={quantityChange}
+              onChange={(event) => setQuantityChange(event.target.value)}
+              placeholder={changeType === "restock" ? "e.g. 10" : "e.g. -2 or 5"}
+            />
+          </div>
 
-          <Input
-            label="Note"
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            placeholder="Optional adjustment note"
-            className="xl:col-span-3"
-          />
+          <div className="xl:col-span-3">
+            <Input
+              label="Note"
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder="Optional adjustment note"
+            />
+          </div>
 
-          <div className="flex items-end justify-end xl:col-span-2">
-            <Button onClick={() => adjustMutation.mutate()} disabled={adjustMutation.isPending || !activeProductId}>
+          <div className="flex items-end justify-center xl:col-span-12">
+            <Button onClick={handleApplyClick} disabled={adjustMutation.isPending || !activeProductId}>
               {adjustMutation.isPending ? "Applying..." : "Apply Change"}
             </Button>
           </div>
         </div>
       </Card>
+
+      {showApplyConfirm ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl">
+            <h3 className="text-lg font-semibold text-slate-900">Confirm Stock Change</h3>
+            <p className="mt-2 text-sm text-slate-600">
+              This change will update inventory and create a stock history record.
+            </p>
+
+            <div className="mt-4 space-y-1 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+              <p>
+                <span className="font-medium">Product:</span> {activeProduct?.name ?? "-"}
+              </p>
+              <p>
+                <span className="font-medium">Type:</span> {changeType === "restock" ? "Restock (+)" : "Adjustment (+/-)"}
+              </p>
+              <p>
+                <span className="font-medium">Quantity:</span> {quantityChange}
+              </p>
+            </div>
+
+            <div className="mt-4 flex justify-center gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => setShowApplyConfirm(false)}
+                disabled={adjustMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button onClick={() => adjustMutation.mutate()} disabled={adjustMutation.isPending}>
+                {adjustMutation.isPending ? "Applying..." : "Confirm Change"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <Card className="overflow-hidden">
         <div className="border-b border-slate-200 px-4 py-3">

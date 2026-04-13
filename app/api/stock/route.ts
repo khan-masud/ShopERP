@@ -10,6 +10,7 @@ import { requireUserFromRequest } from "@/lib/server/require-user";
 import { handleApiError, jsonOk } from "@/lib/server/response";
 
 type QueryParam = string | number | boolean | Date | null;
+type StockStatusFilter = "all" | "low_stock" | "out_of_stock";
 
 interface StockProductRow extends RowDataPacket {
   id: string;
@@ -38,6 +39,8 @@ interface StockHistoryRow extends RowDataPacket {
 interface StockSummaryRow extends RowDataPacket {
   total_products: number;
   low_stock_count: number;
+  out_of_stock_count: number;
+  total_stock: number;
 }
 
 interface CountRow extends RowDataPacket {
@@ -74,6 +77,22 @@ function parsePositiveInt(value: string | null, fallback: number, max: number) {
   return Math.min(Math.max(Math.floor(parsed), 1), max);
 }
 
+function parseStockStatus(value: string | null, lowOnly: boolean): StockStatusFilter {
+  if (value === "low_stock") {
+    return "low_stock";
+  }
+
+  if (value === "out_of_stock") {
+    return "out_of_stock";
+  }
+
+  if (lowOnly) {
+    return "low_stock";
+  }
+
+  return "all";
+}
+
 export async function GET(request: NextRequest) {
   try {
     const user = await requireUserFromRequest(request);
@@ -83,6 +102,12 @@ export async function GET(request: NextRequest) {
 
     const query = searchParams.get("q")?.trim() ?? "";
     const lowOnly = searchParams.get("lowOnly") === "1";
+    const stockStatus = parseStockStatus(searchParams.get("stockStatus"), lowOnly);
+    const productId = searchParams.get("productId")?.trim() ?? "";
+
+    if (productId && !/^[0-9a-fA-F-]{36}$/.test(productId)) {
+      throw new ApiError(400, "Invalid product id");
+    }
 
     const productPage = parsePositiveInt(searchParams.get("page"), 1, 1000000);
     const productPageSize = parsePositiveInt(
@@ -108,8 +133,15 @@ export async function GET(request: NextRequest) {
       values.push(`%${query}%`, `%${query}%`);
     }
 
-    if (lowOnly) {
-      conditions.push("p.stock <= p.min_stock");
+    if (stockStatus === "low_stock") {
+      conditions.push("p.stock > 0 AND p.stock <= p.min_stock");
+    } else if (stockStatus === "out_of_stock") {
+      conditions.push("p.stock <= 0");
+    }
+
+    if (productId) {
+      conditions.push("p.id = ?");
+      values.push(productId);
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -120,6 +152,11 @@ export async function GET(request: NextRequest) {
     if (query) {
       historyConditions.push("(h.product_name LIKE ? OR h.note LIKE ?)");
       historyValues.push(`%${query}%`, `%${query}%`);
+    }
+
+    if (productId) {
+      historyConditions.push("h.product_id = ?");
+      historyValues.push(productId);
     }
 
     const historyWhere = historyConditions.length ? `WHERE ${historyConditions.join(" AND ")}` : "";
@@ -177,7 +214,9 @@ export async function GET(request: NextRequest) {
       dbQuery<StockSummaryRow[]>(
         `SELECT
            COUNT(*) AS total_products,
-           COALESCE(SUM(CASE WHEN stock <= min_stock THEN 1 ELSE 0 END), 0) AS low_stock_count
+           COALESCE(SUM(CASE WHEN stock > 0 AND stock <= min_stock THEN 1 ELSE 0 END), 0) AS low_stock_count,
+           COALESCE(SUM(CASE WHEN stock <= 0 THEN 1 ELSE 0 END), 0) AS out_of_stock_count,
+           COALESCE(SUM(stock), 0) AS total_stock
          FROM products
          WHERE is_active = 1`,
       ),
@@ -206,6 +245,8 @@ export async function GET(request: NextRequest) {
       summary: {
         total_products: Number(summaryRows[0]?.total_products ?? 0),
         low_stock_count: Number(summaryRows[0]?.low_stock_count ?? 0),
+        out_of_stock_count: Number(summaryRows[0]?.out_of_stock_count ?? 0),
+        total_stock: Number(summaryRows[0]?.total_stock ?? 0),
       },
     });
   } catch (error) {
