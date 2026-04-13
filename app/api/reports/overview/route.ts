@@ -266,7 +266,7 @@ export async function GET(request: NextRequest) {
            DATE(expense_date) AS period,
            COALESCE(SUM(amount), 0) AS expense_total
          FROM expenses
-         WHERE expense_date BETWEEN ? AND ?
+         WHERE expense_date BETWEEN ? AND ? AND is_deleted = 0
          GROUP BY DATE(expense_date)
          ORDER BY period ASC`,
         [dayStart, dayEnd],
@@ -309,7 +309,7 @@ export async function GET(request: NextRequest) {
            DATE_FORMAT(expense_date, '%Y-%m') AS period,
            COALESCE(SUM(amount), 0) AS expense_total
          FROM expenses
-         WHERE expense_date >= ? AND expense_date < ?
+         WHERE expense_date >= ? AND expense_date < ? AND is_deleted = 0
          GROUP BY DATE_FORMAT(expense_date, '%Y-%m')
          ORDER BY period ASC`,
         [monthStartDate, monthEndExclusiveDate],

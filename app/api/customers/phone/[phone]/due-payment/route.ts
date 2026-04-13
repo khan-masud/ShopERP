@@ -5,6 +5,12 @@ import { logAudit } from "@/lib/server/audit";
 import { roundMoney } from "@/lib/server/crypto";
 import { withTransaction } from "@/lib/server/db";
 import { ApiError } from "@/lib/server/errors";
+import {
+  beginIdempotentRequest,
+  buildIdempotencyHash,
+  completeIdempotentRequest,
+  readIdempotencyKey,
+} from "@/lib/server/idempotency";
 import { assertPermission } from "@/lib/server/permissions";
 import { requireUserFromRequest } from "@/lib/server/require-user";
 import { handleApiError, jsonOk } from "@/lib/server/response";
@@ -40,6 +46,20 @@ type AppliedSale = {
   amount: number;
 };
 
+type CustomerDuePaymentResponse = {
+  customer_id: string;
+  customer_phone: string;
+  amount: number;
+  due_before: number;
+  due_after: number;
+  allocations: AppliedSale[];
+};
+
+type CustomerDuePaymentTxResult = {
+  replayed: boolean;
+  data: CustomerDuePaymentResponse;
+};
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ phone: string }> },
@@ -65,8 +85,33 @@ export async function POST(
     }
 
     const payload = parsed.data;
+    const idempotencyKey = readIdempotencyKey(request);
+    const idempotencyHash = idempotencyKey
+      ? buildIdempotencyHash({
+        phone,
+        amount: payload.amount,
+        sale_id: payload.sale_id ?? null,
+        note: payload.note ?? null,
+      })
+      : null;
 
-    const result = await withTransaction(async (conn) => {
+    const result = await withTransaction<CustomerDuePaymentTxResult>(async (conn) => {
+      if (idempotencyKey && idempotencyHash) {
+        const replay = await beginIdempotentRequest<CustomerDuePaymentResponse>(conn, {
+          userId: user.id,
+          scope: "customers.due-payment",
+          key: idempotencyKey,
+          requestHash: idempotencyHash,
+        });
+
+        if (replay.replayed) {
+          return {
+            replayed: true,
+            data: replay.response,
+          };
+        }
+      }
+
       const [customerRows] = await conn.query<CustomerRow[]>(
         `SELECT id, phone, due
          FROM customers
@@ -205,7 +250,7 @@ export async function POST(
         conn,
       );
 
-      return {
+      const responsePayload: CustomerDuePaymentResponse = {
         customer_id: customer.id,
         customer_phone: customer.phone,
         amount: paymentAmount,
@@ -213,9 +258,24 @@ export async function POST(
         due_after: dueAfter,
         allocations: appliedSales,
       };
+
+      if (idempotencyKey && idempotencyHash) {
+        await completeIdempotentRequest(conn, {
+          userId: user.id,
+          scope: "customers.due-payment",
+          key: idempotencyKey,
+          requestHash: idempotencyHash,
+          response: responsePayload,
+        });
+      }
+
+      return {
+        replayed: false,
+        data: responsePayload,
+      };
     });
 
-    return jsonOk(result, 201);
+    return jsonOk(result.data, result.replayed ? 200 : 201);
   } catch (error) {
     return handleApiError(error);
   }

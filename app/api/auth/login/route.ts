@@ -2,6 +2,7 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 import {
+  getRefreshTokenExpiryDate,
   setAuthCookies,
   signAccessToken,
   signRefreshToken,
@@ -9,7 +10,7 @@ import {
 } from "@/lib/server/auth";
 import { logAudit } from "@/lib/server/audit";
 import { sha256 } from "@/lib/server/crypto";
-import { withTransaction, dbQuery } from "@/lib/server/db";
+import { dbExecute, dbQuery, withTransaction } from "@/lib/server/db";
 import { ApiError } from "@/lib/server/errors";
 import { handleApiError, jsonOk } from "@/lib/server/response";
 
@@ -26,6 +27,21 @@ interface UserRow extends RowDataPacket {
   password_hash: string;
 }
 
+interface LoginAttemptRow extends RowDataPacket {
+  attempt_count: number;
+  first_attempt_at: Date;
+  blocked_until: Date | null;
+}
+
+const DUMMY_PASSWORD_HASH = "$2b$10$7EqJtq98hPqEX7fNZaFWoO5M6lNQ2YsmY6hS48fM9vDOMkMt2rtIu";
+const LOGIN_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_ATTEMPT_LIMIT = 5;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
+
+function getLoginRateLimitError() {
+  return new ApiError(429, "Too many failed login attempts. Try again in 15 minutes");
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => {
@@ -38,6 +54,26 @@ export async function POST(request: NextRequest) {
     }
 
     const email = parsed.data.email.toLowerCase().trim();
+    const ipAddress =
+      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+      request.headers.get("x-real-ip") ??
+      null;
+    const ipBucket = ipAddress ?? "";
+    const userAgent = request.headers.get("user-agent") ?? null;
+
+    const attemptRows = await dbQuery<LoginAttemptRow[]>(
+      `SELECT attempt_count, first_attempt_at, blocked_until
+       FROM auth_login_attempts
+       WHERE email = ? AND ip_address = ?
+       LIMIT 1`,
+      [email, ipBucket],
+    );
+
+    const attempt = attemptRows[0];
+
+    if (attempt?.blocked_until && new Date(attempt.blocked_until).getTime() > Date.now()) {
+      throw getLoginRateLimitError();
+    }
 
     const users = await dbQuery<UserRow[]>(
       `SELECT id, name, email, role, password_hash
@@ -48,20 +84,51 @@ export async function POST(request: NextRequest) {
     );
 
     const user = users[0];
-    if (!user) {
+    const passwordMatch = await verifyPassword(
+      parsed.data.password,
+      user?.password_hash ?? DUMMY_PASSWORD_HASH,
+    );
+
+    if (!user || !passwordMatch) {
+      const now = Date.now();
+      const hasRollingWindow =
+        !!attempt &&
+        now - new Date(attempt.first_attempt_at).getTime() <= LOGIN_ATTEMPT_WINDOW_MS;
+
+      const currentAttempts = hasRollingWindow ? Number(attempt?.attempt_count ?? 0) : 0;
+      const nextAttemptCount = currentAttempts + 1;
+      const firstAttemptAt = hasRollingWindow
+        ? new Date(attempt?.first_attempt_at ?? now)
+        : new Date(now);
+
+      const blockedUntil =
+        nextAttemptCount >= LOGIN_ATTEMPT_LIMIT
+          ? new Date(now + LOGIN_LOCKOUT_MS)
+          : null;
+
+      await dbExecute(
+        `INSERT INTO auth_login_attempts (
+          email, ip_address, attempt_count, first_attempt_at, blocked_until, updated_at
+        ) VALUES (?, ?, ?, ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+          attempt_count = VALUES(attempt_count),
+          first_attempt_at = VALUES(first_attempt_at),
+          blocked_until = VALUES(blocked_until),
+          updated_at = NOW()`,
+        [email, ipBucket, nextAttemptCount, firstAttemptAt, blockedUntil],
+      );
+
+      if (blockedUntil) {
+        throw getLoginRateLimitError();
+      }
+
       throw new ApiError(401, "Invalid email or password");
     }
 
-    const passwordMatch = await verifyPassword(parsed.data.password, user.password_hash);
-    if (!passwordMatch) {
-      throw new ApiError(401, "Invalid email or password");
-    }
-
-    const ipAddress =
-      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-      request.headers.get("x-real-ip") ??
-      null;
-    const userAgent = request.headers.get("user-agent") ?? null;
+    await dbExecute(
+      `DELETE FROM auth_login_attempts WHERE email = ? AND ip_address = ?`,
+      [email, ipBucket],
+    );
 
     const authResult = await withTransaction(async (conn) => {
       const [historyResult] = await conn.execute<ResultSetHeader>(
@@ -86,10 +153,12 @@ export async function POST(request: NextRequest) {
         sessionId,
       });
 
+      const refreshTokenExpiresAt = getRefreshTokenExpiryDate();
+
       await conn.execute(
         `INSERT INTO user_refresh_tokens (id, user_id, session_id, token_hash, expires_at)
-         VALUES (UUID(), ?, ?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY))`,
-        [user.id, sessionId, sha256(refreshToken)],
+         VALUES (UUID(), ?, ?, ?, ?)`,
+        [user.id, sessionId, sha256(refreshToken), refreshTokenExpiresAt],
       );
 
       await conn.execute(`UPDATE users SET last_login_at = NOW() WHERE id = ?`, [user.id]);

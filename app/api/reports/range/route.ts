@@ -278,7 +278,8 @@ export async function GET(request: NextRequest) {
       dbQuery<NumberValueRow[]>(
         `SELECT COALESCE(SUM(amount), 0) AS value
          FROM expenses
-         WHERE expense_date BETWEEN ? AND ?`,
+         WHERE expense_date BETWEEN ? AND ?
+           AND is_deleted = 0`,
         [from, to],
       ),
       dbQuery<NumberValueRow[]>(
@@ -325,6 +326,7 @@ export async function GET(request: NextRequest) {
            COALESCE(SUM(amount), 0) AS expense_total
          FROM expenses
          WHERE expense_date BETWEEN ? AND ?
+           AND is_deleted = 0
          GROUP BY ${expensePeriodExpr}
          ORDER BY period ASC`,
         [from, to],

@@ -122,6 +122,14 @@ async function fetchCustomerHistory(phone: string) {
   return payload.data;
 }
 
+function generateIdempotencyKey(prefix: string) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 export default function CustomersPage() {
   const queryClient = useQueryClient();
 
@@ -194,6 +202,7 @@ export default function CustomersPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Idempotency-Key": generateIdempotencyKey("customer-due"),
         },
         body: JSON.stringify({
           amount: parsedAmount,

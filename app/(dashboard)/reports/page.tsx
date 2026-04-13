@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Area,
@@ -333,6 +333,17 @@ export default function ReportsPage() {
   const [dailyMetric, setDailyMetric] = useState<MetricKey>("sales_total");
   const [monthlyMetric, setMonthlyMetric] = useState<MetricKey>("net_profit");
   const [rangeMetric, setRangeMetric] = useState<MetricKey>("net_profit");
+  const [isChartClientReady, setIsChartClientReady] = useState(false);
+
+  useEffect(() => {
+    const animationFrame = window.requestAnimationFrame(() => {
+      setIsChartClientReady(true);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+    };
+  }, []);
 
   const isCustomRangeValid = useMemo(
     () => validateDateInput(fromDate) && validateDateInput(toDate) && fromDate <= toDate,
@@ -532,7 +543,7 @@ export default function ReportsPage() {
       {overviewData ? (
         <>
           <div className="grid gap-4 lg:grid-cols-2">
-            <Card className="p-4">
+            <Card className="min-w-0 p-4">
               <h3 className="text-sm font-semibold text-slate-900">Today Snapshot</h3>
               <p className="mt-1 text-xs text-slate-500">{overviewData.daily_summary.period}</p>
 
@@ -682,35 +693,39 @@ export default function ReportsPage() {
                 </div>
               </div>
 
-              <div className="mt-4 h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={dailyChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                    <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 12 }} minTickGap={18} />
-                    <YAxis
-                      tick={{ fill: "#64748b", fontSize: 12 }}
-                      tickFormatter={(value: number) => formatCompactMoney(value)}
-                      width={56}
-                    />
-                    <Tooltip
-                      formatter={(value) =>
-                        formatTaka(Number(Array.isArray(value) ? value[0] : (value ?? 0)))
-                      }
-                      labelFormatter={(value) => `Date: ${value}`}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey={selectedDailyMetric.key}
-                      stroke={selectedDailyMetric.color}
-                      fill={selectedDailyMetric.fill}
-                      strokeWidth={2}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+              <div className="mt-4 h-72 min-w-0">
+                {isChartClientReady ? (
+                  <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+                    <AreaChart data={dailyChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                      <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 12 }} minTickGap={18} />
+                      <YAxis
+                        tick={{ fill: "#64748b", fontSize: 12 }}
+                        tickFormatter={(value: number) => formatCompactMoney(value)}
+                        width={56}
+                      />
+                      <Tooltip
+                        formatter={(value) =>
+                          formatTaka(Number(Array.isArray(value) ? value[0] : (value ?? 0)))
+                        }
+                        labelFormatter={(value) => `Date: ${value}`}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey={selectedDailyMetric.key}
+                        stroke={selectedDailyMetric.color}
+                        fill={selectedDailyMetric.fill}
+                        strokeWidth={2}
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full w-full" />
+                )}
               </div>
             </Card>
 
-            <Card className="p-4">
+            <Card className="min-w-0 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-semibold text-slate-900">Monthly Trend</h3>
@@ -731,31 +746,35 @@ export default function ReportsPage() {
                 </div>
               </div>
 
-              <div className="mt-4 h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={monthlyChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                    <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 12 }} minTickGap={16} />
-                    <YAxis
-                      tick={{ fill: "#64748b", fontSize: 12 }}
-                      tickFormatter={(value: number) => formatCompactMoney(value)}
-                      width={56}
-                    />
-                    <Tooltip
-                      formatter={(value) =>
-                        formatTaka(Number(Array.isArray(value) ? value[0] : (value ?? 0)))
-                      }
-                      labelFormatter={(value) => `Month: ${value}`}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey={selectedMonthlyMetric.key}
-                      stroke={selectedMonthlyMetric.color}
-                      fill={selectedMonthlyMetric.fill}
-                      strokeWidth={2}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+              <div className="mt-4 h-72 min-w-0">
+                {isChartClientReady ? (
+                  <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+                    <AreaChart data={monthlyChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                      <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 12 }} minTickGap={16} />
+                      <YAxis
+                        tick={{ fill: "#64748b", fontSize: 12 }}
+                        tickFormatter={(value: number) => formatCompactMoney(value)}
+                        width={56}
+                      />
+                      <Tooltip
+                        formatter={(value) =>
+                          formatTaka(Number(Array.isArray(value) ? value[0] : (value ?? 0)))
+                        }
+                        labelFormatter={(value) => `Month: ${value}`}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey={selectedMonthlyMetric.key}
+                        stroke={selectedMonthlyMetric.color}
+                        fill={selectedMonthlyMetric.fill}
+                        strokeWidth={2}
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full w-full" />
+                )}
               </div>
             </Card>
           </div>
@@ -812,7 +831,7 @@ export default function ReportsPage() {
             </div>
           </Card>
 
-          <Card className="p-4">
+          <Card className="min-w-0 p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h3 className="text-sm font-semibold text-slate-900">Custom Date-Range Summary</h3>
@@ -853,31 +872,35 @@ export default function ReportsPage() {
                   />
                 </div>
 
-                <div className="mt-4 h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={rangeChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                      <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 12 }} minTickGap={16} />
-                      <YAxis
-                        tick={{ fill: "#64748b", fontSize: 12 }}
-                        tickFormatter={(value: number) => formatCompactMoney(value)}
-                        width={56}
-                      />
-                      <Tooltip
-                        formatter={(value) =>
-                          formatTaka(Number(Array.isArray(value) ? value[0] : (value ?? 0)))
-                        }
-                        labelFormatter={(value) => `${groupBy === "day" ? "Date" : "Period"}: ${value}`}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey={selectedRangeMetric.key}
-                        stroke={selectedRangeMetric.color}
-                        fill={selectedRangeMetric.fill}
-                        strokeWidth={2}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
+                <div className="mt-4 h-72 min-w-0">
+                  {isChartClientReady ? (
+                    <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+                      <AreaChart data={rangeChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                        <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 12 }} minTickGap={16} />
+                        <YAxis
+                          tick={{ fill: "#64748b", fontSize: 12 }}
+                          tickFormatter={(value: number) => formatCompactMoney(value)}
+                          width={56}
+                        />
+                        <Tooltip
+                          formatter={(value) =>
+                            formatTaka(Number(Array.isArray(value) ? value[0] : (value ?? 0)))
+                          }
+                          labelFormatter={(value) => `${groupBy === "day" ? "Date" : "Period"}: ${value}`}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey={selectedRangeMetric.key}
+                          stroke={selectedRangeMetric.color}
+                          fill={selectedRangeMetric.fill}
+                          strokeWidth={2}
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-full w-full" />
+                  )}
                 </div>
               </>
             ) : null}

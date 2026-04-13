@@ -18,6 +18,8 @@ const protectedPagePrefixes = [
   "/permissions",
 ];
 
+const mutatingMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
 function isProtectedPage(pathname: string) {
   return protectedPagePrefixes.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
@@ -35,10 +37,38 @@ function isProtectedApi(pathname: string) {
   ].some((publicPath) => pathname === publicPath || pathname.startsWith(`${publicPath}/`));
 }
 
+function isMutatingRequest(request: NextRequest) {
+  return mutatingMethods.has(request.method.toUpperCase());
+}
+
+function hasValidSameOrigin(request: NextRequest) {
+  const requestOrigin = request.nextUrl.origin;
+  const origin = request.headers.get("origin");
+  const referer = request.headers.get("referer");
+
+  if (origin) {
+    return origin === requestOrigin;
+  }
+
+  if (referer) {
+    try {
+      return new URL(referer).origin === requestOrigin;
+    } catch {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 export function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const accessToken = request.cookies.get(ACCESS_COOKIE_NAME)?.value;
   const payload = accessToken ? verifyAccessToken(accessToken) : null;
+
+  if (isProtectedApi(pathname) && isMutatingRequest(request) && !hasValidSameOrigin(request)) {
+    return NextResponse.json({ success: false, message: "Invalid request origin" }, { status: 403 });
+  }
 
   if (pathname === "/login" && payload) {
     return NextResponse.redirect(new URL("/dashboard", request.url));

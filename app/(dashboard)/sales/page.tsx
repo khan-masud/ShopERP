@@ -105,6 +105,14 @@ function parseNumber(value: string | number | null | undefined) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
+function generateIdempotencyKey(prefix: string) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 async function fetchSalesList(filters: {
   search: string;
   fromDate: string;
@@ -260,6 +268,7 @@ export default function SalesPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Idempotency-Key": generateIdempotencyKey("sale-due"),
         },
         body: JSON.stringify({
           amount: parsedAmount,

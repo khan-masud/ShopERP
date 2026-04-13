@@ -24,9 +24,32 @@ type CartItem = {
   quantity: number;
 };
 
-async function fetchProducts(search: string) {
+type ProductsApiResponse = {
+  products: Product[];
+  pagination: {
+    page: number;
+    page_size: number;
+    total_count: number;
+    total_pages: number;
+  };
+};
+
+function generateIdempotencyKey(prefix: string) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+async function fetchProducts(search: string, page: number, pageSize: number) {
   const params = new URLSearchParams();
-  if (search) params.set("q", search);
+  if (search) {
+    params.set("q", search);
+  }
+
+  params.set("page", String(page));
+  params.set("pageSize", String(pageSize));
 
   const res = await fetch(`/api/products?${params.toString()}`, {
     cache: "no-store",
@@ -34,7 +57,7 @@ async function fetchProducts(search: string) {
 
   const payload = (await res.json()) as {
     success: boolean;
-    data?: { products: Product[] };
+    data?: ProductsApiResponse;
     message?: string;
   };
 
@@ -42,12 +65,27 @@ async function fetchProducts(search: string) {
     throw new Error(payload.message ?? "Failed to load products");
   }
 
-  return (payload.data?.products ?? []).filter((item) => item.stock > 0);
+  const safeData = payload.data ?? {
+    products: [],
+    pagination: {
+      page,
+      page_size: pageSize,
+      total_count: 0,
+      total_pages: 1,
+    },
+  };
+
+  return {
+    ...safeData,
+    products: safeData.products.filter((item) => item.stock > 0),
+  };
 }
 
 export default function POSPage() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
+  const [productPage, setProductPage] = useState(1);
+  const [productPageSize, setProductPageSize] = useState(50);
   const [cart, setCart] = useState<Record<string, CartItem>>({});
 
   const [customerPhone, setCustomerPhone] = useState("");
@@ -56,10 +94,18 @@ export default function POSPage() {
   const [discountPercent, setDiscountPercent] = useState(0);
   const [paidAmount, setPaidAmount] = useState(0);
 
-  const { data: products = [], isLoading } = useQuery({
-    queryKey: ["pos-products", search],
-    queryFn: () => fetchProducts(search),
+  const { data: productsData, isLoading } = useQuery({
+    queryKey: ["pos-products", search, productPage, productPageSize],
+    queryFn: () => fetchProducts(search, productPage, productPageSize),
   });
+
+  const products = productsData?.products ?? [];
+  const productsPagination = productsData?.pagination ?? {
+    page: productPage,
+    page_size: productPageSize,
+    total_count: products.length,
+    total_pages: 1,
+  };
 
   const cartItems = useMemo(() => Object.values(cart), [cart]);
 
@@ -124,6 +170,7 @@ export default function POSPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Idempotency-Key": generateIdempotencyKey("checkout"),
         },
         body: JSON.stringify({
           customer_phone: customerPhone.trim(),
@@ -184,7 +231,10 @@ export default function POSPage() {
           <Input
             placeholder="Search product by name or SKU"
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setProductPage(1);
+            }}
             className="mb-4"
           />
 
@@ -206,6 +256,55 @@ export default function POSPage() {
                 </div>
               </button>
             ))}
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
+            <p className="text-xs text-slate-600">
+              Showing {products.length} of {productsPagination.total_count} products
+            </p>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                <span>Rows</span>
+                <select
+                  className="h-8 rounded-md border border-slate-300 px-2 text-xs"
+                  value={String(productsPagination.page_size)}
+                  onChange={(event) => {
+                    setProductPageSize(Number(event.target.value));
+                    setProductPage(1);
+                  }}
+                >
+                  <option value="25">25</option>
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                  <option value="200">200</option>
+                </select>
+              </label>
+
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setProductPage((prev) => Math.max(prev - 1, 1))}
+                disabled={productsPagination.page <= 1}
+              >
+                Previous
+              </Button>
+
+              <span className="min-w-24 text-center text-xs text-slate-600">
+                Page {productsPagination.page} of {productsPagination.total_pages}
+              </span>
+
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() =>
+                  setProductPage((prev) => Math.min(prev + 1, productsPagination.total_pages))
+                }
+                disabled={productsPagination.page >= productsPagination.total_pages}
+              >
+                Next
+              </Button>
+            </div>
           </div>
         </Card>
       </section>

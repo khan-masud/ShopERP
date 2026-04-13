@@ -2,6 +2,7 @@ import type { RowDataPacket } from "mysql2/promise";
 import type { NextRequest } from "next/server";
 import {
   clearAuthCookies,
+  getRefreshTokenExpiryDate,
   setAuthCookies,
   signAccessToken,
   signRefreshToken,
@@ -101,10 +102,19 @@ export async function POST(request: NextRequest) {
         sessionId: tokenRow.session_id ?? undefined,
       });
 
+      const refreshTokenExpiresAt = getRefreshTokenExpiryDate();
+
       await conn.execute(
         `INSERT INTO user_refresh_tokens (id, user_id, session_id, token_hash, expires_at)
-         VALUES (UUID(), ?, ?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY))`,
-        [user.id, tokenRow.session_id, sha256(newRefreshToken)],
+         VALUES (UUID(), ?, ?, ?, ?)`,
+        [user.id, tokenRow.session_id, sha256(newRefreshToken), refreshTokenExpiresAt],
+      );
+
+      await conn.execute(
+        `DELETE FROM user_refresh_tokens
+         WHERE revoked_at IS NOT NULL
+           AND revoked_at < DATE_SUB(NOW(), INTERVAL 30 DAY)
+         LIMIT 500`,
       );
 
       await logAudit(

@@ -5,6 +5,12 @@ import { logAudit } from "@/lib/server/audit";
 import { roundMoney } from "@/lib/server/crypto";
 import { withTransaction } from "@/lib/server/db";
 import { ApiError } from "@/lib/server/errors";
+import {
+  beginIdempotentRequest,
+  buildIdempotencyHash,
+  completeIdempotentRequest,
+  readIdempotencyKey,
+} from "@/lib/server/idempotency";
 import { assertPermission } from "@/lib/server/permissions";
 import { requireUserFromRequest } from "@/lib/server/require-user";
 import { handleApiError, jsonOk } from "@/lib/server/response";
@@ -19,7 +25,11 @@ interface SaleDueRow extends RowDataPacket {
   customer_id: string | null;
   customer_phone: string;
   due: string;
-  customer_due: string | null;
+}
+
+interface CustomerDueRow extends RowDataPacket {
+  id: string;
+  due: string;
 }
 
 function parseSaleId(input: string) {
@@ -35,6 +45,22 @@ function cleanText(value?: string | null) {
   const text = value?.trim();
   return text ? text : null;
 }
+
+type SaleDuePaymentResponse = {
+  sale_id: number;
+  customer_id: string;
+  customer_phone: string;
+  amount: number;
+  sale_due_before: number;
+  sale_due_after: number;
+  customer_due_before: number;
+  customer_due_after: number;
+};
+
+type SaleDuePaymentTxResult = {
+  replayed: boolean;
+  data: SaleDuePaymentResponse;
+};
 
 export async function POST(
   request: NextRequest,
@@ -57,17 +83,35 @@ export async function POST(
     }
 
     const payload = parsed.data;
+    const idempotencyKey = readIdempotencyKey(request);
+    const idempotencyHash = idempotencyKey
+      ? buildIdempotencyHash({ saleId, amount: payload.amount, note: payload.note ?? null })
+      : null;
 
-    const result = await withTransaction(async (conn) => {
+    const result = await withTransaction<SaleDuePaymentTxResult>(async (conn) => {
+      if (idempotencyKey && idempotencyHash) {
+        const replay = await beginIdempotentRequest<SaleDuePaymentResponse>(conn, {
+          userId: user.id,
+          scope: "sales.due-payment",
+          key: idempotencyKey,
+          requestHash: idempotencyHash,
+        });
+
+        if (replay.replayed) {
+          return {
+            replayed: true,
+            data: replay.response,
+          };
+        }
+      }
+
       const [saleRows] = await conn.query<SaleDueRow[]>(
         `SELECT
            s.id,
            s.customer_id,
            s.customer_phone,
-           s.due,
-           c.due AS customer_due
+           s.due
          FROM sales s
-         LEFT JOIN customers c ON c.id = s.customer_id
          WHERE s.id = ?
          LIMIT 1
          FOR UPDATE`,
@@ -83,6 +127,20 @@ export async function POST(
         throw new ApiError(400, "This sale is missing a customer reference");
       }
 
+      const [customerRows] = await conn.query<CustomerDueRow[]>(
+        `SELECT id, due
+         FROM customers
+         WHERE id = ?
+         LIMIT 1
+         FOR UPDATE`,
+        [sale.customer_id],
+      );
+
+      const customer = customerRows[0];
+      if (!customer) {
+        throw new ApiError(400, "Customer reference is invalid for this sale");
+      }
+
       const saleDueBefore = roundMoney(Number(sale.due));
       if (saleDueBefore <= 0) {
         throw new ApiError(400, "Selected sale has no due");
@@ -93,7 +151,7 @@ export async function POST(
         throw new ApiError(400, "Payment amount exceeds selected sale due");
       }
 
-      const customerDueBefore = roundMoney(Number(sale.customer_due ?? 0));
+      const customerDueBefore = roundMoney(Number(customer.due));
       const saleDueAfter = roundMoney(saleDueBefore - paymentAmount);
       const customerDueAfter = roundMoney(Math.max(customerDueBefore - paymentAmount, 0));
 
@@ -108,14 +166,14 @@ export async function POST(
         `UPDATE customers
          SET due = ?, updated_at = NOW()
          WHERE id = ?`,
-        [customerDueAfter, sale.customer_id],
+        [customerDueAfter, customer.id],
       );
 
       await conn.execute(
         `INSERT INTO due_payments (
           id, sale_id, customer_id, amount, note, created_by, created_at
         ) VALUES (UUID(), ?, ?, ?, ?, ?, NOW())`,
-        [sale.id, sale.customer_id, paymentAmount, cleanText(payload.note), user.id],
+        [sale.id, customer.id, paymentAmount, cleanText(payload.note), user.id],
       );
 
       await logAudit(
@@ -131,9 +189,9 @@ export async function POST(
         conn,
       );
 
-      return {
+      const responsePayload: SaleDuePaymentResponse = {
         sale_id: sale.id,
-        customer_id: sale.customer_id,
+        customer_id: customer.id,
         customer_phone: sale.customer_phone,
         amount: paymentAmount,
         sale_due_before: saleDueBefore,
@@ -141,9 +199,24 @@ export async function POST(
         customer_due_before: customerDueBefore,
         customer_due_after: customerDueAfter,
       };
+
+      if (idempotencyKey && idempotencyHash) {
+        await completeIdempotentRequest(conn, {
+          userId: user.id,
+          scope: "sales.due-payment",
+          key: idempotencyKey,
+          requestHash: idempotencyHash,
+          response: responsePayload,
+        });
+      }
+
+      return {
+        replayed: false,
+        data: responsePayload,
+      };
     });
 
-    return jsonOk(result, 201);
+    return jsonOk(result.data, result.replayed ? 200 : 201);
   } catch (error) {
     return handleApiError(error);
   }

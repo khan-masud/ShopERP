@@ -1,3 +1,4 @@
+import "../../scripts/load-env";
 import assert from "node:assert/strict";
 import { before, describe, test } from "node:test";
 
@@ -57,8 +58,14 @@ type StockAdjustResponse = {
 };
 
 const baseUrl = process.env.SMOKE_BASE_URL ?? "http://localhost:3000";
-const adminEmail = process.env.SMOKE_ADMIN_EMAIL ?? "";
-const adminPassword = process.env.SMOKE_ADMIN_PASSWORD ?? "";
+const adminEmail =
+  process.env.SMOKE_ADMIN_EMAIL ??
+  process.env.SEED_ADMIN_EMAIL ??
+  "admin@shoperp.local";
+const adminPassword =
+  process.env.SMOKE_ADMIN_PASSWORD ??
+  process.env.SEED_ADMIN_PASSWORD ??
+  "";
 const smokeEnabled = Boolean(adminEmail && adminPassword);
 
 class ApiSession {

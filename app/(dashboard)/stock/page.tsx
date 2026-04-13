@@ -35,6 +35,12 @@ type StockHistoryItem = {
 
 type StockResponse = {
   products: StockProduct[];
+  products_pagination: {
+    page: number;
+    page_size: number;
+    total_count: number;
+    total_pages: number;
+  };
   history: StockHistoryItem[];
   history_pagination: {
     page: number;
@@ -61,6 +67,8 @@ type ApiErrorPayload = {
 async function fetchStock(
   search: string,
   lowOnly: boolean,
+  productPage: number,
+  productPageSize: number,
   historyPage: number,
   historyPageSize: number,
 ) {
@@ -73,6 +81,9 @@ async function fetchStock(
   if (lowOnly) {
     params.set("lowOnly", "1");
   }
+
+  params.set("page", String(productPage));
+  params.set("pageSize", String(productPageSize));
 
   params.set("historyPage", String(historyPage));
   params.set("historyPageSize", String(historyPageSize));
@@ -96,6 +107,8 @@ export default function StockPage() {
 
   const [search, setSearch] = useState("");
   const [lowOnly, setLowOnly] = useState(false);
+  const [productPage, setProductPage] = useState(1);
+  const [productPageSize, setProductPageSize] = useState(50);
   const [historyPage, setHistoryPage] = useState(1);
   const [historyPageSize, setHistoryPageSize] = useState(20);
   const [selectedProductId, setSelectedProductId] = useState("");
@@ -108,11 +121,34 @@ export default function StockPage() {
     isLoading,
     isError,
   } = useQuery({
-    queryKey: ["stock-module", search, lowOnly, historyPage, historyPageSize],
-    queryFn: () => fetchStock(search, lowOnly, historyPage, historyPageSize),
+    queryKey: [
+      "stock-module",
+      search,
+      lowOnly,
+      productPage,
+      productPageSize,
+      historyPage,
+      historyPageSize,
+    ],
+    queryFn: () =>
+      fetchStock(search, lowOnly, productPage, productPageSize, historyPage, historyPageSize),
   });
 
   const products = useMemo(() => data?.products ?? [], [data]);
+  const productsPagination = data?.products_pagination ?? {
+    page: productPage,
+    page_size: productPageSize,
+    total_count: products.length,
+    total_pages: 1,
+  };
+  const productsTotalCount = productsPagination.total_count;
+  const showingProductsFrom =
+    productsTotalCount === 0 ? 0 : (productsPagination.page - 1) * productsPagination.page_size + 1;
+  const showingProductsTo =
+    productsTotalCount === 0
+      ? 0
+      : Math.min(productsPagination.page * productsPagination.page_size, productsTotalCount);
+
   const history = data?.history ?? [];
   const historyPagination = data?.history_pagination ?? {
     page: historyPage,
@@ -217,6 +253,7 @@ export default function StockPage() {
             value={search}
             onChange={(event) => {
               setSearch(event.target.value);
+              setProductPage(1);
               setHistoryPage(1);
             }}
           />
@@ -227,6 +264,7 @@ export default function StockPage() {
               checked={lowOnly}
               onChange={(event) => {
                 setLowOnly(event.target.checked);
+                setProductPage(1);
                 setHistoryPage(1);
               }}
               className="h-4 w-4 rounded border-slate-300 text-blue-600"
@@ -241,6 +279,7 @@ export default function StockPage() {
               onClick={() => {
                 setSearch("");
                 setLowOnly(false);
+                setProductPage(1);
                 setHistoryPage(1);
               }}
             >
@@ -366,6 +405,57 @@ export default function StockPage() {
                 )}
               </tbody>
             </table>
+          </div>
+        ) : null}
+
+        {!isLoading && !isError ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3">
+            <p className="text-xs text-slate-600">
+              Showing {showingProductsFrom}-{showingProductsTo} of {productsTotalCount}
+            </p>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                <span>Rows</span>
+                <select
+                  className="h-8 rounded-md border border-slate-300 px-2 text-xs"
+                  value={String(productsPagination.page_size)}
+                  onChange={(event) => {
+                    setProductPageSize(Number(event.target.value));
+                    setProductPage(1);
+                  }}
+                >
+                  <option value="25">25</option>
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                  <option value="200">200</option>
+                </select>
+              </label>
+
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setProductPage((prev) => Math.max(prev - 1, 1))}
+                disabled={productsPagination.page <= 1}
+              >
+                Previous
+              </Button>
+
+              <span className="min-w-24 text-center text-xs text-slate-600">
+                Page {productsPagination.page} of {productsPagination.total_pages}
+              </span>
+
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() =>
+                  setProductPage((prev) => Math.min(prev + 1, productsPagination.total_pages))
+                }
+                disabled={productsPagination.page >= productsPagination.total_pages}
+              >
+                Next
+              </Button>
+            </div>
           </div>
         ) : null}
       </Card>

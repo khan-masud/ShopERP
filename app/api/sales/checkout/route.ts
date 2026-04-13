@@ -5,6 +5,12 @@ import { logAudit } from "@/lib/server/audit";
 import { roundMoney } from "@/lib/server/crypto";
 import { withTransaction } from "@/lib/server/db";
 import { ApiError } from "@/lib/server/errors";
+import {
+  beginIdempotentRequest,
+  buildIdempotencyHash,
+  completeIdempotentRequest,
+  readIdempotencyKey,
+} from "@/lib/server/idempotency";
 import { assertPermission } from "@/lib/server/permissions";
 import { requireUserFromRequest } from "@/lib/server/require-user";
 import { handleApiError, jsonOk } from "@/lib/server/response";
@@ -58,6 +64,32 @@ type PreparedItem = {
   quantityAfter: number;
 };
 
+type CheckoutResponse = {
+  sale_id: number;
+  customer_id: string;
+  customer_phone: string;
+  subtotal: number;
+  discount_percent: number;
+  total: number;
+  tendered: number;
+  paid: number;
+  due: number;
+  change: number;
+  loyalty_earned: number;
+  items: Array<{
+    product_id: string;
+    product_name: string;
+    quantity: number;
+    sell_price: number;
+    total: number;
+  }>;
+};
+
+type CheckoutTxResult = {
+  replayed: boolean;
+  data: CheckoutResponse;
+};
+
 function cleanText(value?: string | null) {
   const text = value?.trim();
   return text ? text : null;
@@ -78,8 +110,26 @@ export async function POST(request: NextRequest) {
     }
 
     const payload = parsed.data;
+    const idempotencyKey = readIdempotencyKey(request);
+    const idempotencyHash = idempotencyKey ? buildIdempotencyHash(payload) : null;
 
-    const result = await withTransaction(async (conn) => {
+    const result = await withTransaction<CheckoutTxResult>(async (conn) => {
+      if (idempotencyKey && idempotencyHash) {
+        const replay = await beginIdempotentRequest<CheckoutResponse>(conn, {
+          userId: user.id,
+          scope: "sales.checkout",
+          key: idempotencyKey,
+          requestHash: idempotencyHash,
+        });
+
+        if (replay.replayed) {
+          return {
+            replayed: true,
+            data: replay.response,
+          };
+        }
+      }
+
       const customerPhone = payload.customer_phone.trim();
       let customerNameSnapshot = cleanText(payload.customer_name);
       let customerAddressSnapshot = cleanText(payload.customer_address);
@@ -178,9 +228,10 @@ export async function POST(request: NextRequest) {
       const discountPercent = payload.discount_percent ?? 0;
       const discountAmount = roundMoney((subtotal * discountPercent) / 100);
       const total = roundMoney(Math.max(subtotal - discountAmount, 0));
-      const paid = roundMoney(payload.paid ?? 0);
+      const tendered = roundMoney(payload.paid ?? 0);
+      const paid = roundMoney(Math.min(tendered, total));
       const due = roundMoney(Math.max(total - paid, 0));
-      const change = roundMoney(Math.max(paid - total, 0));
+      const change = roundMoney(Math.max(tendered - total, 0));
 
       const [saleResult] = await conn.execute<ResultSetHeader>(
         `INSERT INTO sales (
@@ -295,13 +346,14 @@ export async function POST(request: NextRequest) {
         conn,
       );
 
-      return {
+      const responsePayload: CheckoutResponse = {
         sale_id: saleId,
         customer_id: customerId,
         customer_phone: customerPhone,
         subtotal,
         discount_percent: discountPercent,
         total,
+        tendered,
         paid,
         due,
         change,
@@ -314,9 +366,24 @@ export async function POST(request: NextRequest) {
           total: item.lineTotal,
         })),
       };
+
+      if (idempotencyKey && idempotencyHash) {
+        await completeIdempotentRequest(conn, {
+          userId: user.id,
+          scope: "sales.checkout",
+          key: idempotencyKey,
+          requestHash: idempotencyHash,
+          response: responsePayload,
+        });
+      }
+
+      return {
+        replayed: false,
+        data: responsePayload,
+      };
     });
 
-    return jsonOk(result, 201);
+    return jsonOk(result.data, result.replayed ? 200 : 201);
   } catch (error) {
     return handleApiError(error);
   }

@@ -100,7 +100,7 @@ export async function GET(request: NextRequest) {
       throw new ApiError(400, "Invalid expense category filter");
     }
 
-    const conditions: string[] = [];
+    const conditions: string[] = ["e.is_deleted = 0"];
     const values: QueryParam[] = [];
 
     if (query) {

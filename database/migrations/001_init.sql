@@ -36,6 +36,33 @@ CREATE TABLE IF NOT EXISTS user_refresh_tokens (
   INDEX idx_user_refresh_expires_at (expires_at)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS auth_login_attempts (
+  email VARCHAR(191) NOT NULL,
+  ip_address VARCHAR(45) NOT NULL DEFAULT '',
+  attempt_count INT NOT NULL DEFAULT 0,
+  first_attempt_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  blocked_until DATETIME NULL,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (email, ip_address),
+  INDEX idx_auth_login_attempts_blocked_until (blocked_until)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  id CHAR(36) PRIMARY KEY,
+  user_id CHAR(36) NOT NULL,
+  scope VARCHAR(80) NOT NULL,
+  idempotency_key VARCHAR(120) NOT NULL,
+  request_hash CHAR(64) NOT NULL,
+  status ENUM('pending', 'completed') NOT NULL DEFAULT 'pending',
+  response_json MEDIUMTEXT NULL,
+  expires_at DATETIME NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  UNIQUE KEY uniq_idempotency_scope_key (user_id, scope, idempotency_key),
+  INDEX idx_idempotency_expires_at (expires_at)
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS role_permissions (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   role ENUM('admin', 'staff') NOT NULL,
@@ -145,8 +172,12 @@ CREATE TABLE IF NOT EXISTS expenses (
   expense_date DATE NOT NULL,
   created_by CHAR(36) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  is_deleted TINYINT(1) NOT NULL DEFAULT 0,
+  deleted_at DATETIME NULL,
+  deleted_by CHAR(36) NULL,
   FOREIGN KEY (created_by) REFERENCES users(id),
-  INDEX idx_expenses_date (expense_date)
+  INDEX idx_expenses_date (expense_date),
+  INDEX idx_expenses_is_deleted (is_deleted)
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS due_payments (
@@ -195,6 +226,60 @@ SET @role_permissions_can_edit_sql := IF(
 PREPARE role_permissions_can_edit_stmt FROM @role_permissions_can_edit_sql;
 EXECUTE role_permissions_can_edit_stmt;
 DEALLOCATE PREPARE role_permissions_can_edit_stmt;
+
+SET @expenses_is_deleted_exists := (
+  SELECT COUNT(*)
+  FROM INFORMATION_SCHEMA.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'expenses'
+    AND COLUMN_NAME = 'is_deleted'
+);
+
+SET @expenses_is_deleted_sql := IF(
+  @expenses_is_deleted_exists = 0,
+  'ALTER TABLE expenses ADD COLUMN is_deleted TINYINT(1) NOT NULL DEFAULT 0 AFTER created_at',
+  'SELECT 1'
+);
+
+PREPARE expenses_is_deleted_stmt FROM @expenses_is_deleted_sql;
+EXECUTE expenses_is_deleted_stmt;
+DEALLOCATE PREPARE expenses_is_deleted_stmt;
+
+SET @expenses_deleted_at_exists := (
+  SELECT COUNT(*)
+  FROM INFORMATION_SCHEMA.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'expenses'
+    AND COLUMN_NAME = 'deleted_at'
+);
+
+SET @expenses_deleted_at_sql := IF(
+  @expenses_deleted_at_exists = 0,
+  'ALTER TABLE expenses ADD COLUMN deleted_at DATETIME NULL AFTER is_deleted',
+  'SELECT 1'
+);
+
+PREPARE expenses_deleted_at_stmt FROM @expenses_deleted_at_sql;
+EXECUTE expenses_deleted_at_stmt;
+DEALLOCATE PREPARE expenses_deleted_at_stmt;
+
+SET @expenses_deleted_by_exists := (
+  SELECT COUNT(*)
+  FROM INFORMATION_SCHEMA.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'expenses'
+    AND COLUMN_NAME = 'deleted_by'
+);
+
+SET @expenses_deleted_by_sql := IF(
+  @expenses_deleted_by_exists = 0,
+  'ALTER TABLE expenses ADD COLUMN deleted_by CHAR(36) NULL AFTER deleted_at',
+  'SELECT 1'
+);
+
+PREPARE expenses_deleted_by_stmt FROM @expenses_deleted_by_sql;
+EXECUTE expenses_deleted_by_stmt;
+DEALLOCATE PREPARE expenses_deleted_by_stmt;
 
 INSERT INTO role_permissions (role, module_key, can_view, can_add, can_edit, can_delete)
 VALUES

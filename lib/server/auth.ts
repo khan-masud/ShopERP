@@ -6,7 +6,7 @@ import {
   REFRESH_COOKIE_NAME,
   type UserRole,
 } from "@/lib/server/constants";
-import { appEnv, isProduction } from "@/lib/server/env";
+import { appEnv, assertStrongJwtSecrets, isProduction } from "@/lib/server/env";
 
 export interface TokenPayload extends JwtPayload {
   sub: string;
@@ -36,12 +36,26 @@ function ttlToSeconds(ttl: string, fallback: number) {
 }
 
 export function signAccessToken(payload: TokenPayload) {
+  assertStrongJwtSecrets();
   return jwt.sign(payload, appEnv.JWT_ACCESS_SECRET, {
     expiresIn: ACCESS_TTL_SECONDS,
   });
 }
 
+export function getAccessTokenTtlSeconds() {
+  return ACCESS_TTL_SECONDS;
+}
+
+export function getRefreshTokenTtlSeconds() {
+  return REFRESH_TTL_SECONDS;
+}
+
+export function getRefreshTokenExpiryDate(fromDate = new Date()) {
+  return new Date(fromDate.getTime() + REFRESH_TTL_SECONDS * 1000);
+}
+
 export function signRefreshToken(payload: TokenPayload) {
+  assertStrongJwtSecrets();
   return jwt.sign(payload, appEnv.JWT_REFRESH_SECRET, {
     expiresIn: REFRESH_TTL_SECONDS,
   });
@@ -49,6 +63,7 @@ export function signRefreshToken(payload: TokenPayload) {
 
 export function verifyAccessToken(token: string) {
   try {
+    assertStrongJwtSecrets();
     return jwt.verify(token, appEnv.JWT_ACCESS_SECRET) as TokenPayload;
   } catch {
     return null;
@@ -57,6 +72,7 @@ export function verifyAccessToken(token: string) {
 
 export function verifyRefreshToken(token: string) {
   try {
+    assertStrongJwtSecrets();
     return jwt.verify(token, appEnv.JWT_REFRESH_SECRET) as TokenPayload;
   } catch {
     return null;
@@ -73,7 +89,7 @@ export function setAuthCookies(
     value: accessToken,
     httpOnly: true,
     secure: isProduction,
-    sameSite: "lax",
+    sameSite: "strict",
     path: "/",
     maxAge: ACCESS_TTL_SECONDS,
   });

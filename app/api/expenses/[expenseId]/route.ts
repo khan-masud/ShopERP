@@ -12,6 +12,7 @@ interface ExpenseRow extends RowDataPacket {
   title: string;
   amount: string;
   category: string;
+  is_deleted: number;
 }
 
 function parseExpenseId(value: string) {
@@ -37,9 +38,9 @@ export async function DELETE(
 
     const deleted = await withTransaction(async (conn) => {
       const [rows] = await conn.query<ExpenseRow[]>(
-        `SELECT id, title, amount, category
+        `SELECT id, title, amount, category, is_deleted
          FROM expenses
-         WHERE id = ?
+         WHERE id = ? AND is_deleted = 0
          LIMIT 1
          FOR UPDATE`,
         [expenseId],
@@ -50,7 +51,12 @@ export async function DELETE(
         throw new ApiError(404, "Expense not found");
       }
 
-      await conn.execute(`DELETE FROM expenses WHERE id = ?`, [expenseId]);
+      await conn.execute(
+        `UPDATE expenses
+         SET is_deleted = 1, deleted_at = NOW(), deleted_by = ?
+         WHERE id = ?`,
+        [user.id, expenseId],
+      );
 
       await logAudit(
         {

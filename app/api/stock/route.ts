@@ -84,10 +84,13 @@ export async function GET(request: NextRequest) {
     const query = searchParams.get("q")?.trim() ?? "";
     const lowOnly = searchParams.get("lowOnly") === "1";
 
-    const parsedLimit = Number(searchParams.get("limit") ?? 200);
-    const limit = Number.isFinite(parsedLimit)
-      ? Math.min(Math.max(Math.floor(parsedLimit), 1), 500)
-      : 200;
+    const productPage = parsePositiveInt(searchParams.get("page"), 1, 1000000);
+    const productPageSize = parsePositiveInt(
+      searchParams.get("pageSize") ?? searchParams.get("limit"),
+      50,
+      200,
+    );
+    const productOffset = (productPage - 1) * productPageSize;
 
     const historyPage = parsePositiveInt(searchParams.get("historyPage"), 1, 1000000);
     const historyPageSize = parsePositiveInt(
@@ -121,7 +124,7 @@ export async function GET(request: NextRequest) {
 
     const historyWhere = historyConditions.length ? `WHERE ${historyConditions.join(" AND ")}` : "";
 
-    const [products, history, historyCountRows, summaryRows] = await Promise.all([
+    const [products, productCountRows, history, historyCountRows, summaryRows] = await Promise.all([
       dbQuery<StockProductRow[]>(
         `SELECT
            p.id,
@@ -135,8 +138,15 @@ export async function GET(request: NextRequest) {
          FROM products p
          ${where}
          ORDER BY (p.stock <= p.min_stock) DESC, p.updated_at DESC
-         LIMIT ?`,
-        [...values, limit],
+         LIMIT ?
+         OFFSET ?`,
+        [...values, productPageSize, productOffset],
+      ),
+      dbQuery<CountRow[]>(
+        `SELECT COUNT(*) AS total_count
+         FROM products p
+         ${where}`,
+        values,
       ),
       dbQuery<StockHistoryRow[]>(
         `SELECT
@@ -173,11 +183,19 @@ export async function GET(request: NextRequest) {
       ),
     ]);
 
+    const productsTotalCount = Number(productCountRows[0]?.total_count ?? 0);
+    const productsTotalPages = Math.max(1, Math.ceil(productsTotalCount / productPageSize));
     const historyTotalCount = Number(historyCountRows[0]?.total_count ?? 0);
     const historyTotalPages = Math.max(1, Math.ceil(historyTotalCount / historyPageSize));
 
     return jsonOk({
       products,
+      products_pagination: {
+        page: productPage,
+        page_size: productPageSize,
+        total_count: productsTotalCount,
+        total_pages: productsTotalPages,
+      },
       history,
       history_pagination: {
         page: historyPage,
