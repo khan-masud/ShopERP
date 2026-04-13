@@ -51,10 +51,15 @@ interface ProductRow extends RowDataPacket {
 interface ProductSummaryRow extends RowDataPacket {
   total_count: number;
   low_stock_count: number;
+  stock_out_count: number;
+  expiring_soon_count: number;
+  total_product_value: string;
 }
 
 type QueryParam = string | number | boolean | Date | null;
 type ProductSort = "updated" | "top_selling";
+type ProductStockStatus = "all" | "low_stock" | "out_of_stock";
+type ProductExpiryStatus = "all" | "expiring_30d";
 
 function parsePositiveInt(value: string | null, fallback: number, max: number) {
   const parsed = Number(value ?? fallback);
@@ -72,6 +77,26 @@ function parseProductSort(value: string | null): ProductSort {
   }
 
   return "updated";
+}
+
+function parseProductStockStatus(value: string | null): ProductStockStatus {
+  if (value === "low_stock") {
+    return "low_stock";
+  }
+
+  if (value === "out_of_stock") {
+    return "out_of_stock";
+  }
+
+  return "all";
+}
+
+function parseProductExpiryStatus(value: string | null): ProductExpiryStatus {
+  if (value === "expiring_30d") {
+    return "expiring_30d";
+  }
+
+  return "all";
 }
 
 function generateSku(name: string) {
@@ -94,6 +119,8 @@ export async function GET(request: NextRequest) {
     const category = searchParams.get("category")?.trim();
     const includeInactive = searchParams.get("includeInactive") === "1";
     const inStockOnly = searchParams.get("inStockOnly") === "1";
+    const stockStatus = parseProductStockStatus(searchParams.get("stockStatus"));
+    const expiryStatus = parseProductExpiryStatus(searchParams.get("expiryStatus"));
     const sort = parseProductSort(searchParams.get("sort"));
     const page = parsePositiveInt(searchParams.get("page"), 1, 1000000);
     const pageSize = parsePositiveInt(
@@ -112,6 +139,18 @@ export async function GET(request: NextRequest) {
 
     if (inStockOnly) {
       conditions.push("p.stock > 0");
+    }
+
+    if (stockStatus === "low_stock") {
+      conditions.push("p.stock > 0 AND p.stock <= p.min_stock");
+    } else if (stockStatus === "out_of_stock") {
+      conditions.push("p.stock <= 0");
+    }
+
+    if (expiryStatus === "expiring_30d") {
+      conditions.push(
+        "p.expiry_date IS NOT NULL AND p.expiry_date >= CURRENT_DATE() AND p.expiry_date <= DATE_ADD(CURRENT_DATE(), INTERVAL 30 DAY)",
+      );
     }
 
     if (query) {
@@ -170,7 +209,10 @@ export async function GET(request: NextRequest) {
       dbQuery<ProductSummaryRow[]>(
         `SELECT
            COUNT(*) AS total_count,
-           COALESCE(SUM(CASE WHEN p.stock <= p.min_stock THEN 1 ELSE 0 END), 0) AS low_stock_count
+           COALESCE(SUM(CASE WHEN p.stock > 0 AND p.stock <= p.min_stock THEN 1 ELSE 0 END), 0) AS low_stock_count,
+           COALESCE(SUM(CASE WHEN p.stock <= 0 THEN 1 ELSE 0 END), 0) AS stock_out_count,
+           COALESCE(SUM(CASE WHEN p.expiry_date IS NOT NULL AND p.expiry_date >= CURRENT_DATE() AND p.expiry_date <= DATE_ADD(CURRENT_DATE(), INTERVAL 30 DAY) THEN 1 ELSE 0 END), 0) AS expiring_soon_count,
+           COALESCE(SUM(p.stock * p.buy_price), 0) AS total_product_value
          FROM products p
          ${where}`,
         values,
@@ -190,6 +232,9 @@ export async function GET(request: NextRequest) {
       },
       summary: {
         low_stock_count: Number(summaryRows[0]?.low_stock_count ?? 0),
+        stock_out_count: Number(summaryRows[0]?.stock_out_count ?? 0),
+        expiring_soon_count: Number(summaryRows[0]?.expiring_soon_count ?? 0),
+        total_product_value: Number(summaryRows[0]?.total_product_value ?? 0),
       },
     });
   } catch (error) {

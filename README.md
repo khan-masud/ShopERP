@@ -147,3 +147,22 @@ Open http://localhost:3000
 
 This project avoids Prisma by design for easier shared-hosting compatibility.
 Use Node.js-enabled shared hosting and connect to MySQL via DATABASE_URL or DB_* vars.
+
+## Production Database Pooling
+
+To avoid MySQL "Too many connections" issues in production, keep pool limits conservative and bounded.
+
+- Core env vars:
+	- DB_POOL_LIMIT (default: 5)
+	- DB_POOL_QUEUE_LIMIT (default: 200)
+	- DB_CONNECT_TIMEOUT_MS (default: 10000)
+	- DB_RETRY_MAX_ATTEMPTS (default: 3)
+	- DB_RETRY_BASE_DELAY_MS (default: 120)
+- Sizing rule:
+	- per_instance_pool <= floor((max_connections - reserved_connections) / app_instances)
+	- Keep reserved_connections for admin tools and migrations (commonly 10-20).
+	- Example: max_connections=60, reserved=15, instances=3 => per-instance pool <= 15.
+- Operational guidance:
+	- Run exactly one app process per expected pool size budget.
+	- Use a process manager (PM2/systemd) to avoid duplicate app workers.
+	- If horizontally scaling, recalculate DB_POOL_LIMIT for each instance.

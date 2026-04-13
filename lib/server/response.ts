@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { ApiError } from "@/lib/server/errors";
+import { ApiError, isDbConnectionCapacityError } from "@/lib/server/errors";
 
 const noStoreHeaders = {
   "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
@@ -28,6 +28,23 @@ export function jsonError(message: string, status = 400, details?: unknown) {
 export function handleApiError(error: unknown) {
   if (error instanceof ApiError) {
     return jsonError(error.message, error.status);
+  }
+
+  if (isDbConnectionCapacityError(error)) {
+    console.error("Database connection capacity reached", error);
+    return NextResponse.json(
+      {
+        success: false,
+        message: "Database is busy right now. Please retry in a few seconds.",
+      },
+      {
+        status: 503,
+        headers: {
+          ...noStoreHeaders,
+          "Retry-After": "2",
+        },
+      },
+    );
   }
 
   console.error("Unhandled API error", error);
