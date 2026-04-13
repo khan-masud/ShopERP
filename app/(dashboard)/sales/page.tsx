@@ -30,7 +30,11 @@ type SaleListItem = {
   created_by_name: string | null;
   item_count: number;
   total_quantity: number;
+  refund_count: number;
+  refunded_quantity: string;
 };
+
+type RefundFilter = "all" | "refundable" | "refunded";
 
 type SaleDetailItem = {
   id: number;
@@ -41,6 +45,7 @@ type SaleDetailItem = {
   subtotal: string;
   discount_percent: string;
   total: string;
+  tendered: string;
   paid: string;
   due: string;
   note: string | null;
@@ -70,12 +75,41 @@ type DuePayment = {
   created_by_name: string | null;
 };
 
+type RefundItem = {
+  id: string;
+  refund_id: string;
+  sale_item_id: string;
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  gross_total: string;
+  refund_total: string;
+  created_at: string;
+};
+
+type SaleRefund = {
+  id: string;
+  refund_note: string | null;
+  gross_amount: string;
+  refund_amount: string;
+  created_at: string;
+  created_by_name: string | null;
+  items: RefundItem[];
+};
+
 type SaleDetailResponse = {
   sale: SaleDetailItem;
   items: SaleItem[];
   due_payments: DuePayment[];
   payment_summary: {
     total_due_paid: string;
+  };
+  refunds: SaleRefund[];
+  refund_summary: {
+    refund_count: number;
+    units_refunded: string;
+    gross_refunded: string;
+    amount_refunded: string;
   };
 };
 
@@ -105,6 +139,38 @@ function parseNumber(value: string | number | null | undefined) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
+function resolveRefundBadge(sale: SaleListItem) {
+  const totalQty = parseNumber(sale.total_quantity);
+  const refundedQty = parseNumber(sale.refunded_quantity);
+  const remainingQty = Math.max(totalQty - refundedQty, 0);
+
+  if (refundedQty > 0 && remainingQty <= 0) {
+    return {
+      label: "Refunded",
+      className: "bg-red-100 text-red-700",
+    };
+  }
+
+  if (refundedQty > 0 && remainingQty > 0) {
+    return {
+      label: "Partially Refunded",
+      className: "bg-amber-100 text-amber-700",
+    };
+  }
+
+  if (remainingQty > 0) {
+    return {
+      label: "Refundable",
+      className: "bg-blue-100 text-blue-700",
+    };
+  }
+
+  return {
+    label: "Not Refundable",
+    className: "bg-slate-100 text-slate-600",
+  };
+}
+
 function generateIdempotencyKey(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `${prefix}-${crypto.randomUUID()}`;
@@ -118,6 +184,7 @@ async function fetchSalesList(filters: {
   fromDate: string;
   toDate: string;
   dueOnly: boolean;
+  refundFilter: RefundFilter;
   page: number;
   pageSize: number;
 }) {
@@ -137,6 +204,10 @@ async function fetchSalesList(filters: {
 
   if (filters.dueOnly) {
     params.set("dueOnly", "1");
+  }
+
+  if (filters.refundFilter !== "all") {
+    params.set("refundFilter", filters.refundFilter);
   }
 
   params.set("page", String(filters.page));
@@ -175,23 +246,27 @@ export default function SalesPage() {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [dueOnly, setDueOnly] = useState(false);
+  const [refundFilter, setRefundFilter] = useState<RefundFilter>("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [selectedSaleId, setSelectedSaleId] = useState<number | null>(null);
   const [dueAmount, setDueAmount] = useState("");
   const [dueNote, setDueNote] = useState("");
+  const [refundNote, setRefundNote] = useState("");
+  const [refundQuantities, setRefundQuantities] = useState<Record<string, string>>({});
 
   const {
     data: salesData,
     isLoading: salesLoading,
     isError: salesError,
   } = useQuery({
-    queryKey: ["sales-history", search, fromDate, toDate, dueOnly, page, pageSize],
+    queryKey: ["sales-history", search, fromDate, toDate, dueOnly, refundFilter, page, pageSize],
     queryFn: () => fetchSalesList({
       search,
       fromDate,
       toDate,
       dueOnly,
+      refundFilter,
       page,
       pageSize,
     }),
@@ -253,6 +328,33 @@ export default function SalesPage() {
     enabled: Boolean(activeSaleId),
   });
 
+  const selectedRefundItems = useMemo(() => {
+    if (!saleDetail) {
+      return [] as Array<{ sale_item_id: string; quantity: number }>;
+    }
+
+    const selected: Array<{ sale_item_id: string; quantity: number }> = [];
+
+    for (const item of saleDetail.items) {
+      const rawValue = refundQuantities[item.id] ?? "";
+      const parsed = Number(rawValue);
+
+      if (!Number.isFinite(parsed)) {
+        continue;
+      }
+
+      const safeQuantity = Math.min(Math.max(Math.floor(parsed), 0), item.quantity);
+      if (safeQuantity > 0) {
+        selected.push({
+          sale_item_id: item.id,
+          quantity: safeQuantity,
+        });
+      }
+    }
+
+    return selected;
+  }, [refundQuantities, saleDetail]);
+
   const collectDueMutation = useMutation({
     mutationFn: async () => {
       if (!activeSaleId) {
@@ -291,6 +393,52 @@ export default function SalesPage() {
         queryClient.invalidateQueries({ queryKey: ["sale-detail", activeSaleId] }),
         queryClient.invalidateQueries({ queryKey: ["customers"] }),
         queryClient.invalidateQueries({ queryKey: ["customer-history"] }),
+      ]);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+
+  const refundMutation = useMutation({
+    mutationFn: async () => {
+      if (!activeSaleId) {
+        throw new Error("Select a sale first");
+      }
+
+      if (selectedRefundItems.length === 0) {
+        throw new Error("Select at least one product and quantity to refund");
+      }
+
+      const res = await fetch(`/api/sales/${activeSaleId}/refund`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": generateIdempotencyKey("sale-refund"),
+        },
+        body: JSON.stringify({
+          items: selectedRefundItems,
+          note: refundNote.trim() || null,
+        }),
+      });
+
+      const payload = (await res.json()) as ApiSuccess<unknown> | ApiErrorPayload;
+      if (!res.ok || !payload.success) {
+        throw new Error((payload as ApiErrorPayload).message ?? "Failed to process refund");
+      }
+    },
+    onSuccess: async () => {
+      toast.success("Refund processed successfully");
+      setRefundNote("");
+      setRefundQuantities({});
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["sales-history"] }),
+        queryClient.invalidateQueries({ queryKey: ["sale-detail", activeSaleId] }),
+        queryClient.invalidateQueries({ queryKey: ["stock-module"] }),
+        queryClient.invalidateQueries({ queryKey: ["reports-overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["reports-range"] }),
+        queryClient.invalidateQueries({ queryKey: ["reports-products"] }),
       ]);
     },
     onError: (error: Error) => {
@@ -351,6 +499,41 @@ export default function SalesPage() {
               />
               Show only due sales
             </label>
+
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-xs font-medium text-slate-600">Refund</span>
+              <Button
+                size="sm"
+                variant={refundFilter === "all" ? "primary" : "ghost"}
+                onClick={() => {
+                  setRefundFilter("all");
+                  setPage(1);
+                }}
+              >
+                All
+              </Button>
+              <Button
+                size="sm"
+                variant={refundFilter === "refundable" ? "primary" : "ghost"}
+                onClick={() => {
+                  setRefundFilter("refundable");
+                  setPage(1);
+                }}
+              >
+                Refundable
+              </Button>
+              <Button
+                size="sm"
+                variant={refundFilter === "refunded" ? "primary" : "ghost"}
+                onClick={() => {
+                  setRefundFilter("refunded");
+                  setPage(1);
+                }}
+              >
+                Refunded
+              </Button>
+            </div>
+
             <Button
               variant="secondary"
               size="sm"
@@ -359,6 +542,7 @@ export default function SalesPage() {
                 setFromDate("");
                 setToDate("");
                 setDueOnly(false);
+                setRefundFilter("all");
                 setPage(1);
               }}
             >
@@ -395,6 +579,7 @@ export default function SalesPage() {
                       <th className="px-3 py-2 text-left">Sale</th>
                       <th className="px-3 py-2 text-left">Customer</th>
                       <th className="px-3 py-2 text-left">Items</th>
+                      <th className="px-3 py-2 text-left">Refund</th>
                       <th className="px-3 py-2 text-right">Total</th>
                       <th className="px-3 py-2 text-right">Paid</th>
                       <th className="px-3 py-2 text-right">Due</th>
@@ -404,13 +589,14 @@ export default function SalesPage() {
                   <tbody>
                     {sales.length === 0 ? (
                       <tr>
-                        <td className="px-3 py-8 text-center text-slate-500" colSpan={7}>
+                        <td className="px-3 py-8 text-center text-slate-500" colSpan={8}>
                           No sales matched the current filters
                         </td>
                       </tr>
                     ) : (
                       sales.map((sale) => {
                         const isActive = sale.id === activeSaleId;
+                        const refundBadge = resolveRefundBadge(sale);
 
                         return (
                           <tr
@@ -420,7 +606,13 @@ export default function SalesPage() {
                             <td className="px-3 py-2">
                               <button
                                 type="button"
-                                onClick={() => setSelectedSaleId(sale.id)}
+                                onClick={() => {
+                                  setSelectedSaleId(sale.id);
+                                  setDueAmount("");
+                                  setDueNote("");
+                                  setRefundNote("");
+                                  setRefundQuantities({});
+                                }}
                                 className="font-semibold text-blue-700 hover:underline"
                               >
                                 #{sale.id}
@@ -432,6 +624,20 @@ export default function SalesPage() {
                             </td>
                             <td className="px-3 py-2 text-xs text-slate-600">
                               {sale.item_count} lines / {sale.total_quantity} qty
+                            </td>
+                            <td className="px-3 py-2">
+                              <div className="flex flex-col gap-1">
+                                <span
+                                  className={`inline-flex w-fit rounded-full px-2 py-0.5 text-[11px] font-medium ${refundBadge.className}`}
+                                >
+                                  {refundBadge.label}
+                                </span>
+                                {Number(sale.refund_count ?? 0) > 0 ? (
+                                  <span className="text-[11px] text-slate-500">
+                                    {sale.refund_count} events / {parseNumber(sale.refunded_quantity)} qty
+                                  </span>
+                                ) : null}
+                              </div>
                             </td>
                             <td className="px-3 py-2 text-right tabular-nums">{formatTaka(sale.total)}</td>
                             <td className="px-3 py-2 text-right tabular-nums">{formatTaka(sale.paid)}</td>
@@ -534,11 +740,17 @@ export default function SalesPage() {
                   </div>
                 </div>
 
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                   <div className="rounded-lg border border-slate-200 p-3">
                     <p className="text-xs text-slate-500">Total</p>
                     <p className="mt-1 text-base font-semibold text-slate-900 tabular-nums">
                       {formatTaka(saleDetail.sale.total)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 p-3">
+                    <p className="text-xs text-slate-500">Tendered</p>
+                    <p className="mt-1 text-base font-semibold text-blue-700 tabular-nums">
+                      {formatTaka(saleDetail.sale.tendered)}
                     </p>
                   </div>
                   <div className="rounded-lg border border-slate-200 p-3">
@@ -609,6 +821,106 @@ export default function SalesPage() {
               ) : (
                 <Card className="p-4 text-sm text-emerald-700">This sale is fully paid.</Card>
               )}
+
+              <Card className="p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-900">Refund Products From This Sale</h4>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Select product quantities to refund. Stock will be restored automatically.
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                    Refunded so far: <span className="font-semibold">{saleDetail.refund_summary.units_refunded} qty</span>
+                  </div>
+                </div>
+
+                {saleDetail.items.length === 0 ? (
+                  <p className="mt-4 text-sm text-slate-500">
+                    No refundable line items left for this sale.
+                  </p>
+                ) : (
+                  <div className="mt-4 overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+                        <tr>
+                          <th className="px-3 py-2 text-left">Product</th>
+                          <th className="px-3 py-2 text-right">Refundable Qty</th>
+                          <th className="px-3 py-2 text-right">Refund Qty</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {saleDetail.items.map((item) => (
+                          <tr key={`refund-${item.id}`} className="border-t border-slate-100">
+                            <td className="px-3 py-2 text-slate-700">{item.product_name}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">{item.quantity}</td>
+                            <td className="px-3 py-2 text-right">
+                              <input
+                                type="number"
+                                min={0}
+                                max={item.quantity}
+                                step={1}
+                                value={refundQuantities[item.id] ?? ""}
+                                onChange={(event) => {
+                                  const raw = event.target.value;
+                                  if (!raw) {
+                                    setRefundQuantities((prev) => {
+                                      const next = { ...prev };
+                                      delete next[item.id];
+                                      return next;
+                                    });
+                                    return;
+                                  }
+
+                                  const parsed = Number(raw);
+                                  const safe = Number.isFinite(parsed)
+                                    ? Math.min(Math.max(Math.floor(parsed), 0), item.quantity)
+                                    : 0;
+
+                                  setRefundQuantities((prev) => ({
+                                    ...prev,
+                                    [item.id]: String(safe),
+                                  }));
+                                }}
+                                className="h-9 w-24 rounded-md border border-slate-300 px-2 text-right text-sm"
+                                placeholder="0"
+                              />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <Input
+                    label="Refund Note"
+                    value={refundNote}
+                    onChange={(event) => setRefundNote(event.target.value)}
+                    placeholder="Reason for refund"
+                  />
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                    <p>
+                      Selected lines: <span className="font-semibold">{selectedRefundItems.length}</span>
+                    </p>
+                    <p className="mt-1">
+                      Selected qty: <span className="font-semibold tabular-nums">
+                        {selectedRefundItems.reduce((sum, item) => sum + item.quantity, 0)}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex justify-end">
+                  <Button
+                    onClick={() => refundMutation.mutate()}
+                    disabled={refundMutation.isPending || selectedRefundItems.length === 0}
+                  >
+                    {refundMutation.isPending ? "Processing Refund..." : "Process Refund"}
+                  </Button>
+                </div>
+              </Card>
 
               <Card className="overflow-hidden">
                 <div className="border-b border-slate-200 px-4 py-3">
@@ -684,6 +996,52 @@ export default function SalesPage() {
                             <td className="px-3 py-2 text-xs text-slate-600">{payment.note || "-"}</td>
                             <td className="px-3 py-2 text-xs text-slate-500">
                               {formatDateTime(payment.created_at)}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+
+              <Card className="overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                  <h4 className="text-sm font-semibold text-slate-900">Refund Timeline</h4>
+                  <p className="text-xs text-slate-500">
+                    Refunds: <span className="font-semibold">{saleDetail.refund_summary.refund_count}</span>
+                  </p>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Refund ID</th>
+                        <th className="px-3 py-2 text-left">Items</th>
+                        <th className="px-3 py-2 text-left">Processed By</th>
+                        <th className="px-3 py-2 text-left">Note</th>
+                        <th className="px-3 py-2 text-left">Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {saleDetail.refunds.length === 0 ? (
+                        <tr>
+                          <td className="px-3 py-6 text-center text-slate-500" colSpan={5}>
+                            No refunds for this sale yet
+                          </td>
+                        </tr>
+                      ) : (
+                        saleDetail.refunds.map((refund) => (
+                          <tr key={refund.id} className="border-t border-slate-100">
+                            <td className="px-3 py-2 text-xs font-medium text-slate-700">{refund.id.slice(0, 8)}</td>
+                            <td className="px-3 py-2 text-xs text-slate-600">
+                              {refund.items.map((item) => `${item.product_name} (${item.quantity})`).join(", ") || "-"}
+                            </td>
+                            <td className="px-3 py-2 text-slate-700">{refund.created_by_name || "System"}</td>
+                            <td className="px-3 py-2 text-xs text-slate-600">{refund.refund_note || "-"}</td>
+                            <td className="px-3 py-2 text-xs text-slate-500">
+                              {formatDateTime(refund.created_at)}
                             </td>
                           </tr>
                         ))

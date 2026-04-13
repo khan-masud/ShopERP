@@ -23,6 +23,8 @@ interface SaleListRow extends RowDataPacket {
   created_by_name: string | null;
   item_count: number;
   total_quantity: number;
+  refund_count: number;
+  refunded_quantity: string;
 }
 
 interface SalesSummaryRow extends RowDataPacket {
@@ -31,6 +33,8 @@ interface SalesSummaryRow extends RowDataPacket {
   total_paid: string;
   total_due: string;
 }
+
+type RefundFilter = "all" | "refundable" | "refunded";
 
 function parsePositiveInt(value: string | null, fallback: number, max: number) {
   const parsed = Number(value ?? fallback);
@@ -71,6 +75,7 @@ export async function GET(request: NextRequest) {
     const fromDate = searchParams.get("from")?.trim() ?? "";
     const toDate = searchParams.get("to")?.trim() ?? "";
     const dueOnly = searchParams.get("dueOnly") === "1";
+    const refundFilter = parseRefundFilter(searchParams.get("refundFilter"));
     const page = parsePositiveInt(searchParams.get("page"), 1, 1000000);
     const pageSize = parsePositiveInt(
       searchParams.get("pageSize") ?? searchParams.get("limit"),
@@ -121,7 +126,52 @@ export async function GET(request: NextRequest) {
       conditions.push("s.due > 0");
     }
 
+    if (refundFilter === "refundable") {
+      conditions.push("(COALESCE(si.total_quantity, 0) - COALESCE(rs.refunded_quantity, 0)) > 0");
+    }
+
+    if (refundFilter === "refunded") {
+      conditions.push("COALESCE(rs.refunded_quantity, 0) > 0");
+    }
+
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    const listJoins = `
+      LEFT JOIN users u ON u.id = s.created_by
+      LEFT JOIN (
+        SELECT
+          sale_id,
+          COALESCE(SUM(CASE WHEN quantity > 0 THEN 1 ELSE 0 END), 0) AS item_count,
+          COALESCE(SUM(quantity), 0) AS total_quantity
+        FROM sale_items
+        GROUP BY sale_id
+      ) si ON si.sale_id = s.id
+      LEFT JOIN (
+        SELECT
+          sale_id,
+          COUNT(DISTINCT refund_id) AS refund_count,
+          COALESCE(SUM(quantity), 0) AS refunded_quantity
+        FROM sale_refund_items
+        GROUP BY sale_id
+      ) rs ON rs.sale_id = s.id`;
+
+    const summaryJoins = `
+      LEFT JOIN (
+        SELECT
+          sale_id,
+          COALESCE(SUM(CASE WHEN quantity > 0 THEN 1 ELSE 0 END), 0) AS item_count,
+          COALESCE(SUM(quantity), 0) AS total_quantity
+        FROM sale_items
+        GROUP BY sale_id
+      ) si ON si.sale_id = s.id
+      LEFT JOIN (
+        SELECT
+          sale_id,
+          COUNT(DISTINCT refund_id) AS refund_count,
+          COALESCE(SUM(quantity), 0) AS refunded_quantity
+        FROM sale_refund_items
+        GROUP BY sale_id
+      ) rs ON rs.sale_id = s.id`;
 
     const [sales, summaryRows] = await Promise.all([
       dbQuery<SaleListRow[]>(
@@ -139,14 +189,11 @@ export async function GET(request: NextRequest) {
            s.created_at,
            u.name AS created_by_name,
            COALESCE(si.item_count, 0) AS item_count,
-           COALESCE(si.total_quantity, 0) AS total_quantity
+           COALESCE(si.total_quantity, 0) AS total_quantity,
+           COALESCE(rs.refund_count, 0) AS refund_count,
+           COALESCE(rs.refunded_quantity, 0) AS refunded_quantity
          FROM sales s
-         LEFT JOIN users u ON u.id = s.created_by
-         LEFT JOIN (
-           SELECT sale_id, COUNT(*) AS item_count, COALESCE(SUM(quantity), 0) AS total_quantity
-           FROM sale_items
-           GROUP BY sale_id
-         ) si ON si.sale_id = s.id
+         ${listJoins}
          ${where}
          ORDER BY s.created_at DESC, s.id DESC
          LIMIT ?
@@ -160,6 +207,7 @@ export async function GET(request: NextRequest) {
            COALESCE(SUM(s.paid), 0) AS total_paid,
            COALESCE(SUM(s.due), 0) AS total_due
          FROM sales s
+         ${summaryJoins}
          ${where}`,
         values,
       ),
@@ -188,4 +236,16 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     return handleApiError(error);
   }
+}
+
+function parseRefundFilter(value: string | null): RefundFilter {
+  if (!value || value === "all") {
+    return "all";
+  }
+
+  if (value === "refundable" || value === "refunded") {
+    return value;
+  }
+
+  throw new ApiError(400, "Invalid refund filter. Use all, refundable, or refunded");
 }

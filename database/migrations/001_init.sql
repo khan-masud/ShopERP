@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS sales (
   subtotal DECIMAL(10,2) NOT NULL,
   discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
   total DECIMAL(10,2) NOT NULL,
+  tendered DECIMAL(10,2) NOT NULL DEFAULT 0,
   paid DECIMAL(10,2) NOT NULL DEFAULT 0,
   due DECIMAL(10,2) NOT NULL DEFAULT 0,
   note TEXT NULL,
@@ -194,6 +195,44 @@ CREATE TABLE IF NOT EXISTS due_payments (
   INDEX idx_due_payments_customer_id (customer_id)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS sale_refunds (
+  id CHAR(36) PRIMARY KEY,
+  sale_id BIGINT NOT NULL,
+  customer_id CHAR(36) NULL,
+  refund_note VARCHAR(255) NULL,
+  gross_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+  refund_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+  created_by CHAR(36) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (sale_id) REFERENCES sales(id),
+  FOREIGN KEY (customer_id) REFERENCES customers(id),
+  FOREIGN KEY (created_by) REFERENCES users(id),
+  INDEX idx_sale_refunds_sale_id (sale_id),
+  INDEX idx_sale_refunds_created_at (created_at)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS sale_refund_items (
+  id CHAR(36) PRIMARY KEY,
+  refund_id CHAR(36) NOT NULL,
+  sale_item_id CHAR(36) NOT NULL,
+  sale_id BIGINT NOT NULL,
+  product_id CHAR(36) NOT NULL,
+  product_name VARCHAR(191) NOT NULL,
+  quantity INT NOT NULL,
+  buy_price DECIMAL(10,2) NOT NULL,
+  sell_price DECIMAL(10,2) NOT NULL,
+  gross_total DECIMAL(10,2) NOT NULL,
+  refund_total DECIMAL(10,2) NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (refund_id) REFERENCES sale_refunds(id) ON DELETE CASCADE,
+  FOREIGN KEY (sale_item_id) REFERENCES sale_items(id),
+  FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE,
+  FOREIGN KEY (product_id) REFERENCES products(id),
+  INDEX idx_sale_refund_items_refund_id (refund_id),
+  INDEX idx_sale_refund_items_sale_id (sale_id),
+  INDEX idx_sale_refund_items_product_id (product_id)
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS audit_logs (
   id CHAR(36) PRIMARY KEY,
   action VARCHAR(120) NOT NULL,
@@ -226,6 +265,29 @@ SET @role_permissions_can_edit_sql := IF(
 PREPARE role_permissions_can_edit_stmt FROM @role_permissions_can_edit_sql;
 EXECUTE role_permissions_can_edit_stmt;
 DEALLOCATE PREPARE role_permissions_can_edit_stmt;
+
+SET @sales_tendered_exists := (
+  SELECT COUNT(*)
+  FROM INFORMATION_SCHEMA.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'sales'
+    AND COLUMN_NAME = 'tendered'
+);
+
+SET @sales_tendered_sql := IF(
+  @sales_tendered_exists = 0,
+  'ALTER TABLE sales ADD COLUMN tendered DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER total',
+  'SELECT 1'
+);
+
+PREPARE sales_tendered_stmt FROM @sales_tendered_sql;
+EXECUTE sales_tendered_stmt;
+DEALLOCATE PREPARE sales_tendered_stmt;
+
+UPDATE sales
+SET tendered = paid
+WHERE tendered = 0
+  AND paid > 0;
 
 SET @expenses_is_deleted_exists := (
   SELECT COUNT(*)

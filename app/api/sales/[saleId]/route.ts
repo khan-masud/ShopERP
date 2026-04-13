@@ -23,6 +23,7 @@ interface SaleDetailRow extends RowDataPacket {
   customer_type: "VIP" | "Regular" | "Wholesale" | null;
   customer_due: string | null;
   loyalty_points: number | null;
+  tendered: string;
 }
 
 interface SaleItemRow extends RowDataPacket {
@@ -46,6 +47,34 @@ interface DuePaymentRow extends RowDataPacket {
 
 interface PaymentSummaryRow extends RowDataPacket {
   total_due_paid: string;
+}
+
+interface SaleRefundRow extends RowDataPacket {
+  id: string;
+  refund_note: string | null;
+  gross_amount: string;
+  refund_amount: string;
+  created_at: Date;
+  created_by_name: string | null;
+}
+
+interface SaleRefundItemRow extends RowDataPacket {
+  id: string;
+  refund_id: string;
+  sale_item_id: string;
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  gross_total: string;
+  refund_total: string;
+  created_at: Date;
+}
+
+interface RefundSummaryRow extends RowDataPacket {
+  refund_count: number;
+  units_refunded: string;
+  gross_refunded: string;
+  amount_refunded: string;
 }
 
 function parseSaleId(input: string) {
@@ -78,6 +107,7 @@ export async function GET(
          s.subtotal,
          s.discount_percent,
          s.total,
+         s.tendered,
          s.paid,
          s.due,
          s.note,
@@ -104,6 +134,7 @@ export async function GET(
         `SELECT id, product_id, product_name, quantity, buy_price, sell_price, total, created_at
          FROM sale_items
          WHERE sale_id = ?
+           AND quantity > 0
          ORDER BY created_at ASC, id ASC`,
         [saleId],
       ),
@@ -124,11 +155,78 @@ export async function GET(
       ),
     ]);
 
+    let refundRows: SaleRefundRow[] = [];
+    let refundItems: SaleRefundItemRow[] = [];
+    let refundSummaryRows: RefundSummaryRow[] = [];
+
+    try {
+      [refundRows, refundItems, refundSummaryRows] = await Promise.all([
+        dbQuery<SaleRefundRow[]>(
+          `SELECT sr.id, sr.refund_note, sr.gross_amount, sr.refund_amount, sr.created_at, u.name AS created_by_name
+           FROM sale_refunds sr
+           LEFT JOIN users u ON u.id = sr.created_by
+           WHERE sr.sale_id = ?
+           ORDER BY sr.created_at DESC`,
+          [saleId],
+        ),
+        dbQuery<SaleRefundItemRow[]>(
+          `SELECT id, refund_id, sale_item_id, product_id, product_name, quantity, gross_total, refund_total, created_at
+           FROM sale_refund_items
+           WHERE sale_id = ?
+           ORDER BY created_at DESC, id DESC`,
+          [saleId],
+        ),
+        dbQuery<RefundSummaryRow[]>(
+          `SELECT
+             COUNT(DISTINCT refund_id) AS refund_count,
+             COALESCE(SUM(quantity), 0) AS units_refunded,
+             COALESCE(SUM(gross_total), 0) AS gross_refunded,
+             COALESCE(SUM(refund_total), 0) AS amount_refunded
+           FROM sale_refund_items
+           WHERE sale_id = ?`,
+          [saleId],
+        ),
+      ]);
+    } catch {
+      // Refund tables may not exist before migration is applied; keep detail API usable.
+      refundRows = [];
+      refundItems = [];
+      refundSummaryRows = [];
+    }
+
+    const refundItemsById = new Map<string, SaleRefundItemRow[]>();
+    for (const row of refundItems) {
+      if (!refundItemsById.has(row.refund_id)) {
+        refundItemsById.set(row.refund_id, []);
+      }
+
+      refundItemsById.get(row.refund_id)?.push(row);
+    }
+
+    const refunds = refundRows.map((refund) => ({
+      id: refund.id,
+      refund_note: refund.refund_note,
+      gross_amount: refund.gross_amount,
+      refund_amount: refund.refund_amount,
+      created_at: refund.created_at,
+      created_by_name: refund.created_by_name,
+      items: refundItemsById.get(refund.id) ?? [],
+    }));
+
+    const refundSummary = refundSummaryRows[0] ?? {
+      refund_count: 0,
+      units_refunded: "0.00",
+      gross_refunded: "0.00",
+      amount_refunded: "0.00",
+    };
+
     return jsonOk({
       sale,
       items,
       due_payments: duePayments,
       payment_summary: paymentSummaryRows[0] ?? { total_due_paid: "0.00" },
+      refunds,
+      refund_summary: refundSummary,
     });
   } catch (error) {
     return handleApiError(error);

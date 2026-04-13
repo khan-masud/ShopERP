@@ -236,9 +236,9 @@ export async function POST(request: NextRequest) {
       const [saleResult] = await conn.execute<ResultSetHeader>(
         `INSERT INTO sales (
           customer_id, customer_name, customer_phone, customer_address,
-          subtotal, discount_percent, total, paid, due, note,
+          subtotal, discount_percent, total, tendered, paid, due, note,
           created_by, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
         [
           customerId,
           customerNameSnapshot,
@@ -247,6 +247,7 @@ export async function POST(request: NextRequest) {
           subtotal,
           discountPercent,
           total,
+          tendered,
           paid,
           due,
           cleanText(payload.note),
