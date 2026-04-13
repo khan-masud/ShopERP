@@ -19,7 +19,8 @@ const checkoutSchema = z.object({
   customer_phone: z.string().min(8).max(40),
   customer_name: z.string().max(191).optional().nullable(),
   customer_address: z.string().max(255).optional().nullable(),
-  discount_percent: z.number().min(0).max(100).default(0),
+  discount_percent: z.number().min(0).max(100).optional(),
+  discount_amount: z.number().min(0).optional(),
   paid: z.number().min(0).default(0),
   note: z.string().max(1500).optional().nullable(),
   items: z
@@ -70,6 +71,7 @@ type CheckoutResponse = {
   customer_phone: string;
   subtotal: number;
   discount_percent: number;
+  discount_amount: number;
   total: number;
   tendered: number;
   paid: number;
@@ -225,8 +227,14 @@ export async function POST(request: NextRequest) {
         subtotal = roundMoney(subtotal + lineTotal);
       }
 
-      const discountPercent = payload.discount_percent ?? 0;
-      const discountAmount = roundMoney((subtotal * discountPercent) / 100);
+      const discountPercentInput = payload.discount_percent ?? 0;
+      const discountAmountInput =
+        payload.discount_amount !== undefined
+          ? roundMoney(payload.discount_amount)
+          : roundMoney((subtotal * discountPercentInput) / 100);
+
+      const discountAmount = roundMoney(Math.min(Math.max(discountAmountInput, 0), subtotal));
+      const discountPercent = subtotal > 0 ? roundMoney((discountAmount / subtotal) * 100) : 0;
       const total = roundMoney(Math.max(subtotal - discountAmount, 0));
       const tendered = roundMoney(payload.paid ?? 0);
       const paid = roundMoney(Math.min(tendered, total));
@@ -353,6 +361,7 @@ export async function POST(request: NextRequest) {
         customer_phone: customerPhone,
         subtotal,
         discount_percent: discountPercent,
+        discount_amount: discountAmount,
         total,
         tendered,
         paid,

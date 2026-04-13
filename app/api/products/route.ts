@@ -54,6 +54,7 @@ interface ProductSummaryRow extends RowDataPacket {
 }
 
 type QueryParam = string | number | boolean | Date | null;
+type ProductSort = "updated" | "top_selling";
 
 function parsePositiveInt(value: string | null, fallback: number, max: number) {
   const parsed = Number(value ?? fallback);
@@ -63,6 +64,14 @@ function parsePositiveInt(value: string | null, fallback: number, max: number) {
   }
 
   return Math.min(Math.max(Math.floor(parsed), 1), max);
+}
+
+function parseProductSort(value: string | null): ProductSort {
+  if (value === "top_selling") {
+    return "top_selling";
+  }
+
+  return "updated";
 }
 
 function generateSku(name: string) {
@@ -84,6 +93,8 @@ export async function GET(request: NextRequest) {
     const query = searchParams.get("q")?.trim();
     const category = searchParams.get("category")?.trim();
     const includeInactive = searchParams.get("includeInactive") === "1";
+    const inStockOnly = searchParams.get("inStockOnly") === "1";
+    const sort = parseProductSort(searchParams.get("sort"));
     const page = parsePositiveInt(searchParams.get("page"), 1, 1000000);
     const pageSize = parsePositiveInt(
       searchParams.get("pageSize") ?? searchParams.get("limit"),
@@ -99,6 +110,10 @@ export async function GET(request: NextRequest) {
       conditions.push("p.is_active = 1");
     }
 
+    if (inStockOnly) {
+      conditions.push("p.stock > 0");
+    }
+
     if (query) {
       conditions.push("(p.name LIKE ? OR p.sku LIKE ?)");
       values.push(`%${query}%`, `%${query}%`);
@@ -110,6 +125,22 @@ export async function GET(request: NextRequest) {
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const listJoin =
+      sort === "top_selling"
+        ? `
+         LEFT JOIN (
+           SELECT
+             si.product_id,
+             COALESCE(SUM(si.quantity), 0) AS sold_quantity
+           FROM sale_items si
+           GROUP BY si.product_id
+         ) ps ON ps.product_id = p.id`
+        : "";
+
+    const orderBy =
+      sort === "top_selling"
+        ? "ORDER BY COALESCE(ps.sold_quantity, 0) DESC, p.updated_at DESC"
+        : "ORDER BY p.updated_at DESC";
 
     const [products, summaryRows] = await Promise.all([
       dbQuery<ProductRow[]>(
@@ -129,8 +160,9 @@ export async function GET(request: NextRequest) {
            p.created_at,
            p.updated_at
          FROM products p
+         ${listJoin}
          ${where}
-         ORDER BY p.updated_at DESC
+         ${orderBy}
          LIMIT ?
          OFFSET ?`,
         [...values, pageSize, offset],
