@@ -34,7 +34,19 @@ interface SalesSummaryRow extends RowDataPacket {
   total_due: string;
 }
 
+interface SalesKpiRow extends RowDataPacket {
+  total_sells_30d: number;
+  pending_dues_count: number;
+  total_customers: number;
+  new_customers_30d: number;
+}
+
 type RefundFilter = "all" | "refundable" | "refunded";
+
+function toNumber(value: unknown) {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
 function parsePositiveInt(value: string | null, fallback: number, max: number) {
   const parsed = Number(value ?? fallback);
@@ -173,7 +185,7 @@ export async function GET(request: NextRequest) {
         GROUP BY sale_id
       ) rs ON rs.sale_id = s.id`;
 
-    const [sales, summaryRows] = await Promise.all([
+    const [sales, summaryRows, kpiRows] = await Promise.all([
       dbQuery<SaleListRow[]>(
         `SELECT
            s.id,
@@ -211,6 +223,13 @@ export async function GET(request: NextRequest) {
          ${where}`,
         values,
       ),
+      dbQuery<SalesKpiRow[]>(
+        `SELECT
+           (SELECT COUNT(*) FROM sales WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)) AS total_sells_30d,
+           (SELECT COUNT(*) FROM sales WHERE due > 0) AS pending_dues_count,
+           (SELECT COUNT(*) FROM customers WHERE is_active = 1) AS total_customers,
+           (SELECT COUNT(*) FROM customers WHERE is_active = 1 AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)) AS new_customers_30d`,
+      ),
     ]);
 
     const summary = summaryRows[0] ?? {
@@ -220,12 +239,25 @@ export async function GET(request: NextRequest) {
       total_due: "0.00",
     };
 
+    const kpi = kpiRows[0] ?? {
+      total_sells_30d: 0,
+      pending_dues_count: 0,
+      total_customers: 0,
+      new_customers_30d: 0,
+    };
+
     const totalCount = Number(summary.sale_count ?? 0);
     const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
     return jsonOk({
       sales,
       summary,
+      stats: {
+        total_sells_30d: toNumber(kpi.total_sells_30d),
+        pending_dues_count: toNumber(kpi.pending_dues_count),
+        total_customers: toNumber(kpi.total_customers),
+        new_customers_30d: toNumber(kpi.new_customers_30d),
+      },
       pagination: {
         page,
         page_size: pageSize,

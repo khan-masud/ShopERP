@@ -116,6 +116,12 @@ type SaleDetailResponse = {
 type SalesListResponse = {
   sales: SaleListItem[];
   summary: SalesSummary;
+  stats: {
+    total_sells_30d: number;
+    pending_dues_count: number;
+    total_customers: number;
+    new_customers_30d: number;
+  };
   pagination: {
     page: number;
     page_size: number;
@@ -290,13 +296,13 @@ export default function SalesPage() {
   });
 
   const sales = useMemo(() => salesData?.sales ?? [], [salesData]);
-  const summary = useMemo(
+  const stats = useMemo(
     () =>
-      salesData?.summary ?? {
-        sale_count: 0,
-        gross_total: "0.00",
-        total_paid: "0.00",
-        total_due: "0.00",
+      salesData?.stats ?? {
+        total_sells_30d: 0,
+        pending_dues_count: 0,
+        total_customers: 0,
+        new_customers_30d: 0,
       },
     [salesData],
   );
@@ -465,46 +471,88 @@ export default function SalesPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-2xl font-semibold text-slate-900">Sales History</h2>
-        <p className="text-sm text-slate-500">Track invoices, inspect line items, and collect due by sale</p>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          title="Current Total Sales (30 Days)"
+          value={String(stats.total_sells_30d)}
+          accent="blue"
+        />
+
+        <StatCard
+          title="Total Customers"
+          value={String(stats.total_customers)}
+          accent="green"
+        />
+
+        <StatCard
+          title="New Customers (30 Days)"
+          value={String(stats.new_customers_30d)}
+          accent="blue"
+        />
+
+        <button
+          type="button"
+          onClick={() => {
+            setDueOnly((prev) => !prev);
+            setPage(1);
+          }}
+          className="rounded-xl text-left transition hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2"
+          aria-pressed={dueOnly}
+          aria-label="Toggle due-only sales filter"
+          title={dueOnly ? "Show all sales" : "Show only due sales"}
+        >
+          <StatCard
+            title="Pending Dues Count"
+            value={String(stats.pending_dues_count)}
+            accent="orange"
+            hint={dueOnly ? "Filter active" : "Click to filter"}
+          />
+        </button>
       </div>
 
       <Card className="p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-          <Input
-            label="Search"
-            placeholder="Sale #, phone, or customer name"
-            value={search}
-            onChange={(event) => {
-              setSearch(event.target.value);
-              setPage(1);
-            }}
-            className="xl:col-span-2"
-          />
+        <h3 className="text-sm font-semibold text-slate-900">Search & Filter Sales</h3>
 
-          <Input
-            label="From Date"
-            type="date"
-            value={fromDate}
-            onChange={(event) => {
-              setFromDate(event.target.value);
-              setPage(1);
-            }}
-          />
+        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-12">
+          <div className="xl:col-span-5">
+            <Input
+              label="Search"
+              placeholder="Sale #, phone, or customer name"
+              value={search}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setPage(1);
+              }}
+            />
+          </div>
 
-          <Input
-            label="To Date"
-            type="date"
-            value={toDate}
-            onChange={(event) => {
-              setToDate(event.target.value);
-              setPage(1);
-            }}
-          />
+          <div className="xl:col-span-2">
+            <Input
+              label="From Date"
+              type="date"
+              value={fromDate}
+              onChange={(event) => {
+                setFromDate(event.target.value);
+                setPage(1);
+              }}
+            />
+          </div>
 
-          <div className="flex flex-col justify-end gap-2">
-            <label className="flex items-center gap-2 text-sm text-slate-700">
+          <div className="xl:col-span-2">
+            <Input
+              label="To Date"
+              type="date"
+              value={toDate}
+              onChange={(event) => {
+                setToDate(event.target.value);
+                setPage(1);
+              }}
+            />
+          </div>
+
+          <div className="xl:col-span-3">
+            <span className="text-xs font-medium text-slate-600">Due Filter</span>
+            <label className="mt-1 flex h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm text-slate-700">
               <input
                 type="checkbox"
                 checked={dueOnly}
@@ -516,65 +564,47 @@ export default function SalesPage() {
               />
               Show only due sales
             </label>
+          </div>
 
-            <div className="flex flex-wrap items-center gap-1">
-              <span className="text-xs font-medium text-slate-600">Refund</span>
-              <Button
-                size="sm"
-                variant={refundFilter === "all" ? "primary" : "ghost"}
-                onClick={() => {
-                  setRefundFilter("all");
-                  setPage(1);
-                }}
-              >
-                All
-              </Button>
-              <Button
-                size="sm"
-                variant={refundFilter === "refundable" ? "primary" : "ghost"}
-                onClick={() => {
-                  setRefundFilter("refundable");
-                  setPage(1);
-                }}
-              >
-                Refundable
-              </Button>
-              <Button
-                size="sm"
-                variant={refundFilter === "refunded" ? "primary" : "ghost"}
-                onClick={() => {
-                  setRefundFilter("refunded");
-                  setPage(1);
-                }}
-              >
-                Refunded
-              </Button>
+          <div className="md:col-span-2 xl:col-span-12">
+            <div className="flex justify-center overflow-x-auto">
+              <div className="inline-flex min-w-max items-center gap-4 px-1">
+                <div className="inline-flex items-center gap-2">
+                  <span className="text-xs font-medium text-slate-600">Refund</span>
+                  <select
+                    className="h-9 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700"
+                    value={refundFilter}
+                    onChange={(event) => {
+                      setRefundFilter(event.target.value as RefundFilter);
+                      setPage(1);
+                    }}
+                    aria-label="Refund filter"
+                  >
+                    <option value="all">All</option>
+                    <option value="refundable">Refundable</option>
+                    <option value="refunded">Refunded</option>
+                  </select>
+                </div>
+
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setSearch("");
+                    setFromDate("");
+                    setToDate("");
+                    setDueOnly(false);
+                    setRefundFilter("all");
+                    setPage(1);
+                  }}
+                >
+                  Clear Filters
+                </Button>
+              </div>
             </div>
-
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                setSearch("");
-                setFromDate("");
-                setToDate("");
-                setDueOnly(false);
-                setRefundFilter("all");
-                setPage(1);
-              }}
-            >
-              Clear Filters
-            </Button>
           </div>
         </div>
       </Card>
-
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Filtered Sales" value={String(summary.sale_count)} accent="blue" />
-        <StatCard title="Gross Total" value={formatTaka(summary.gross_total)} accent="green" />
-        <StatCard title="Collected" value={formatTaka(summary.total_paid)} accent="blue" />
-        <StatCard title="Pending Due" value={formatTaka(summary.total_due)} accent="orange" />
-      </div>
 
       <div className="grid gap-4 xl:grid-cols-12">
         <section className="xl:col-span-7">
