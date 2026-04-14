@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS customers (
   name VARCHAR(191) NULL,
   phone VARCHAR(40) NOT NULL UNIQUE,
   address VARCHAR(255) NULL,
+  note TEXT NULL,
   type ENUM('VIP', 'Regular', 'Wholesale') NOT NULL DEFAULT 'Regular',
   due DECIMAL(10,2) NOT NULL DEFAULT 0,
   loyalty_points INT NOT NULL DEFAULT 0,
@@ -342,6 +343,24 @@ SET @expenses_deleted_by_sql := IF(
 PREPARE expenses_deleted_by_stmt FROM @expenses_deleted_by_sql;
 EXECUTE expenses_deleted_by_stmt;
 DEALLOCATE PREPARE expenses_deleted_by_stmt;
+
+SET @customers_note_exists := (
+  SELECT COUNT(*)
+  FROM INFORMATION_SCHEMA.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'customers'
+    AND COLUMN_NAME = 'note'
+);
+
+SET @customers_note_sql := IF(
+  @customers_note_exists = 0,
+  'ALTER TABLE customers ADD COLUMN note TEXT NULL AFTER address',
+  'SELECT 1'
+);
+
+PREPARE customers_note_stmt FROM @customers_note_sql;
+EXECUTE customers_note_stmt;
+DEALLOCATE PREPARE customers_note_stmt;
 
 INSERT INTO role_permissions (role, module_key, can_view, can_add, can_edit, can_delete)
 VALUES

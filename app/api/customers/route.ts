@@ -10,6 +10,7 @@ interface CustomerRow extends RowDataPacket {
   name: string | null;
   phone: string;
   address: string | null;
+  note: string | null;
   type: "VIP" | "Regular" | "Wholesale";
   due: string;
   loyalty_points: number;
@@ -24,6 +25,21 @@ interface CustomerRow extends RowDataPacket {
 
 interface CountRow extends RowDataPacket {
   total_count: number;
+}
+
+interface StatsRow extends RowDataPacket {
+  total_customers: number;
+  total_regular_customers: number;
+  customers_with_due: number;
+}
+
+interface Sales30dRow extends RowDataPacket {
+  total_sell_30d: number;
+}
+
+function toNumber(value: unknown) {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 type QueryParam = string | number | boolean | Date | null;
@@ -46,6 +62,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const query = searchParams.get("q")?.trim();
     const includeInactive = searchParams.get("includeInactive") === "1";
+    const dueOnly = searchParams.get("dueOnly") === "1";
     const page = parsePositiveInt(searchParams.get("page"), 1, 1000000);
     const pageSize = parsePositiveInt(
       searchParams.get("pageSize") ?? searchParams.get("limit"),
@@ -66,15 +83,22 @@ export async function GET(request: NextRequest) {
       values.push(`%${query}%`, `%${query}%`);
     }
 
+    if (dueOnly) {
+      conditions.push("c.due > 0");
+    }
+
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    const [customers, countRows] = await Promise.all([
+    const statsWhere = includeInactive ? "" : "WHERE c.is_active = 1";
+
+    const [customers, countRows, statsRows, sales30dRows] = await Promise.all([
       dbQuery<CustomerRow[]>(
         `SELECT
            c.id,
            c.name,
            c.phone,
            c.address,
+           c.note,
            c.type,
            c.due,
            c.loyalty_points,
@@ -108,13 +132,34 @@ export async function GET(request: NextRequest) {
          ${where}`,
         values,
       ),
+      dbQuery<StatsRow[]>(
+        `SELECT
+           COUNT(*) AS total_customers,
+           COALESCE(SUM(CASE WHEN c.type = 'Regular' THEN 1 ELSE 0 END), 0) AS total_regular_customers,
+           COALESCE(SUM(CASE WHEN c.due > 0 THEN 1 ELSE 0 END), 0) AS customers_with_due
+         FROM customers c
+         ${statsWhere}`,
+      ),
+      dbQuery<Sales30dRow[]>(
+        `SELECT
+           COUNT(*) AS total_sell_30d
+         FROM sales
+         WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)`,
+      ),
     ]);
 
     const totalCount = Number(countRows[0]?.total_count ?? 0);
     const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+    const stats = statsRows[0];
 
     return jsonOk({
       customers,
+      stats: {
+        total_customers: toNumber(stats?.total_customers),
+        total_regular_customers: toNumber(stats?.total_regular_customers),
+        customers_with_due: toNumber(stats?.customers_with_due),
+        total_sell_30d: toNumber(sales30dRows[0]?.total_sell_30d),
+      },
       pagination: {
         page,
         page_size: pageSize,

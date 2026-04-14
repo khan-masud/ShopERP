@@ -241,15 +241,32 @@ async function fetchSaleDetails(saleId: number) {
 
 export default function SalesPage() {
   const queryClient = useQueryClient();
+  const initialRouteSaleId = useMemo(() => {
+    if (typeof window === "undefined") {
+      return null;
+    }
 
-  const [search, setSearch] = useState("");
+    const routeSaleIdText = new URLSearchParams(window.location.search).get("saleId")?.trim() ?? "";
+    if (!/^\d+$/.test(routeSaleIdText)) {
+      return null;
+    }
+
+    const routeSaleId = Number(routeSaleIdText);
+    if (!Number.isFinite(routeSaleId) || routeSaleId <= 0) {
+      return null;
+    }
+
+    return routeSaleId;
+  }, []);
+
+  const [search, setSearch] = useState(initialRouteSaleId ? String(initialRouteSaleId) : "");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [dueOnly, setDueOnly] = useState(false);
   const [refundFilter, setRefundFilter] = useState<RefundFilter>("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [selectedSaleId, setSelectedSaleId] = useState<number | null>(null);
+  const [selectedSaleId, setSelectedSaleId] = useState<number | null>(initialRouteSaleId);
   const [dueAmount, setDueAmount] = useState("");
   const [dueNote, setDueNote] = useState("");
   const [refundNote, setRefundNote] = useState("");

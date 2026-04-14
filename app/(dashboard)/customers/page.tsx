@@ -1,11 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
+import { StatCard } from "@/components/ui/StatCard";
 import { formatDateTime, formatTaka } from "@/lib/utils";
 
 type CustomerListItem = {
@@ -13,6 +15,7 @@ type CustomerListItem = {
   name: string | null;
   phone: string;
   address: string | null;
+  note: string | null;
   type: "VIP" | "Regular" | "Wholesale";
   due: string;
   loyalty_points: number;
@@ -46,6 +49,7 @@ type CustomerHistoryResponse = {
     name: string | null;
     phone: string;
     address: string | null;
+    note: string | null;
     type: "VIP" | "Regular" | "Wholesale";
     due: string;
     loyalty_points: number;
@@ -67,6 +71,12 @@ type CustomerHistoryResponse = {
 
 type CustomersResponse = {
   customers: CustomerListItem[];
+  stats: {
+    total_customers: number;
+    total_regular_customers: number;
+    customers_with_due: number;
+    total_sell_30d: number;
+  };
   pagination: {
     page: number;
     page_size: number;
@@ -85,10 +95,41 @@ type ApiErrorPayload = {
   message?: string;
 };
 
-async function fetchCustomers(search: string, page: number, pageSize: number) {
+type PermissionFlags = {
+  can_view: boolean;
+  can_add: boolean;
+  can_edit: boolean;
+  can_delete: boolean;
+};
+
+type AuthMeResponse = {
+  user: {
+    id: string;
+    name: string;
+    email: string;
+    role: "admin" | "staff";
+  };
+  permission_map: Record<string, PermissionFlags>;
+};
+
+type UpdateCustomerPayload = {
+  phone: string;
+  name: string | null;
+  address: string | null;
+  note: string | null;
+};
+
+type UpdateCustomerResponse = {
+  customer: CustomerHistoryResponse["customer"];
+};
+
+async function fetchCustomers(search: string, page: number, pageSize: number, dueOnly: boolean) {
   const params = new URLSearchParams();
   if (search.trim()) {
     params.set("q", search.trim());
+  }
+  if (dueOnly) {
+    params.set("dueOnly", "1");
   }
   params.set("page", String(page));
   params.set("pageSize", String(pageSize));
@@ -122,6 +163,38 @@ async function fetchCustomerHistory(phone: string) {
   return payload.data;
 }
 
+async function updateCustomerByPhone(currentPhone: string, payloadBody: UpdateCustomerPayload) {
+  const res = await fetch(`/api/customers/phone/${encodeURIComponent(currentPhone)}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payloadBody),
+  });
+
+  const payload = (await res.json()) as ApiSuccess<UpdateCustomerResponse> | ApiErrorPayload;
+
+  if (!res.ok || !payload.success) {
+    throw new Error((payload as ApiErrorPayload).message ?? "Failed to update customer");
+  }
+
+  return payload.data;
+}
+
+async function fetchAuthMe() {
+  const res = await fetch("/api/auth/me", {
+    cache: "no-store",
+  });
+
+  const payload = (await res.json()) as ApiSuccess<AuthMeResponse> | ApiErrorPayload;
+
+  if (!res.ok || !payload.success) {
+    throw new Error((payload as ApiErrorPayload).message ?? "Failed to load user session");
+  }
+
+  return payload.data;
+}
+
 function generateIdempotencyKey(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `${prefix}-${crypto.randomUUID()}`;
@@ -134,23 +207,40 @@ export default function CustomersPage() {
   const queryClient = useQueryClient();
 
   const [search, setSearch] = useState("");
+  const [dueOnly, setDueOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [selectedPhone, setSelectedPhone] = useState("");
   const [amount, setAmount] = useState("");
   const [saleId, setSaleId] = useState("");
   const [note, setNote] = useState("");
+  const [customerDraftByPhone, setCustomerDraftByPhone] = useState<
+    Record<string, { phone: string; name: string; address: string; note: string }>
+  >({});
 
   const {
     data: customersData,
     isLoading: customersLoading,
     isError: customersError,
   } = useQuery({
-    queryKey: ["customers", search, page, pageSize],
-    queryFn: () => fetchCustomers(search, page, pageSize),
+    queryKey: ["customers", search, dueOnly, page, pageSize],
+    queryFn: () => fetchCustomers(search, page, pageSize, dueOnly),
+  });
+
+  const { data: authMe } = useQuery({
+    queryKey: ["auth-me-permissions"],
+    queryFn: fetchAuthMe,
+    staleTime: 60 * 1000,
+    retry: 0,
   });
 
   const customers = useMemo(() => customersData?.customers ?? [], [customersData]);
+  const customersStats = customersData?.stats ?? {
+    total_customers: 0,
+    total_regular_customers: 0,
+    customers_with_due: 0,
+    total_sell_30d: 0,
+  };
   const customersPagination = customersData?.pagination ?? {
     page,
     page_size: pageSize,
@@ -168,6 +258,8 @@ export default function CustomersPage() {
         customersPagination.page * customersPagination.page_size,
         customersPagination.total_count,
       );
+
+  const canEditCustomer = authMe?.permission_map?.customers?.can_edit ?? false;
 
   const selectedCustomerExists = useMemo(
     () => customers.some((item) => item.phone === selectedPhone),
@@ -233,8 +325,134 @@ export default function CustomersPage() {
     },
   });
 
+  const activeCustomerDraft = useMemo(() => {
+    if (!history || !activePhone) {
+      return {
+        phone: "",
+        name: "",
+        address: "",
+        note: "",
+      };
+    }
+
+    return customerDraftByPhone[activePhone] ?? {
+      phone: history.customer.phone,
+      name: history.customer.name ?? "",
+      address: history.customer.address ?? "",
+      note: history.customer.note ?? "",
+    };
+  }, [activePhone, customerDraftByPhone, history]);
+
+  function updateActiveCustomerDraft(changes: Partial<{ phone: string; name: string; address: string; note: string }>) {
+    if (!activePhone) {
+      return;
+    }
+
+    setCustomerDraftByPhone((prev) => {
+      const current = prev[activePhone] ?? {
+        phone: history?.customer.phone ?? "",
+        name: history?.customer.name ?? "",
+        address: history?.customer.address ?? "",
+        note: history?.customer.note ?? "",
+      };
+
+      return {
+        ...prev,
+        [activePhone]: {
+          ...current,
+          ...changes,
+        },
+      };
+    });
+  }
+
+  const updateCustomerMutation = useMutation({
+    mutationFn: async () => {
+      if (!activePhone) {
+        throw new Error("Select a customer first");
+      }
+
+      const nextPhone = activeCustomerDraft.phone.trim();
+      if (!nextPhone) {
+        throw new Error("Phone is required");
+      }
+
+      return updateCustomerByPhone(activePhone, {
+        phone: nextPhone,
+        name: activeCustomerDraft.name.trim() || null,
+        address: activeCustomerDraft.address.trim() || null,
+        note: activeCustomerDraft.note.trim() || null,
+      });
+    },
+    onSuccess: async (data) => {
+      const updatedPhone = data.customer.phone;
+      setSelectedPhone(updatedPhone);
+      setCustomerDraftByPhone((prev) => {
+        const next = { ...prev };
+        delete next[activePhone];
+        next[updatedPhone] = {
+          phone: data.customer.phone,
+          name: data.customer.name ?? "",
+          address: data.customer.address ?? "",
+          note: data.customer.note ?? "",
+        };
+        return next;
+      });
+      toast.success("Customer info updated");
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["customers"] }),
+        queryClient.invalidateQueries({ queryKey: ["customer-history", activePhone] }),
+        queryClient.invalidateQueries({ queryKey: ["customer-history", updatedPhone] }),
+        queryClient.invalidateQueries({ queryKey: ["sales-history"] }),
+      ]);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+
   return (
-    <div className="grid gap-4 xl:grid-cols-12">
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          title="Total Customers"
+          value={String(customersStats.total_customers)}
+          accent="blue"
+          hint="All active customers"
+        />
+        <StatCard
+          title="Total Regular Customers"
+          value={String(customersStats.total_regular_customers)}
+          accent="green"
+          hint="Type: Regular"
+        />
+        <button
+          type="button"
+          onClick={() => {
+            setDueOnly((prev) => !prev);
+            setPage(1);
+          }}
+          className="rounded-xl text-left transition hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2"
+          aria-pressed={dueOnly}
+          title={dueOnly ? "Show all customers" : "Show customers with due"}
+        >
+          <StatCard
+            title="Customers With Due"
+            value={String(customersStats.customers_with_due)}
+            accent="orange"
+            hint={dueOnly ? "Filter active" : "Click to filter"}
+          />
+        </button>
+        <StatCard
+          title="Total Sell Count (30 Days)"
+          value={String(customersStats.total_sell_30d)}
+          accent="red"
+          hint="Last 30 days"
+        />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-12">
       <section className="xl:col-span-5">
         <Card className="p-4">
           <div className="mb-4 space-y-2">
@@ -251,6 +469,10 @@ export default function CustomersPage() {
             }}
             className="mb-4"
           />
+
+          {dueOnly ? (
+            <p className="mb-3 text-xs font-medium text-amber-700">Due filter is active. Showing only customers with due.</p>
+          ) : null}
 
           {customersLoading ? <p className="text-sm text-slate-500">Loading customers...</p> : null}
           {customersError ? (
@@ -386,6 +608,9 @@ export default function CustomersPage() {
                   {history.customer.address ? (
                     <p className="text-xs text-slate-500">{history.customer.address}</p>
                   ) : null}
+                  {history.customer.note ? (
+                    <p className="mt-1 text-xs font-semibold text-slate-700">Note: {history.customer.note}</p>
+                  ) : null}
                 </div>
 
                 <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
@@ -421,54 +646,108 @@ export default function CustomersPage() {
               </div>
             </Card>
 
-            <Card className="p-4">
-              <h4 className="text-sm font-semibold text-slate-900">Collect Due Payment</h4>
+            {canEditCustomer ? (
+              <Card className="p-4">
+                <h4 className="text-sm font-semibold text-slate-900">Edit Customer Info</h4>
+                <p className="mt-1 text-xs text-slate-500">Update phone, name, address, and note from CRM</p>
 
-              <div className="mt-3 grid gap-3 md:grid-cols-2">
-                <Input
-                  label="Amount"
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={amount}
-                  onChange={(event) => setAmount(event.target.value)}
-                  placeholder="0.00"
-                />
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <Input
+                    label="Phone"
+                    value={activeCustomerDraft.phone}
+                    onChange={(event) => updateActiveCustomerDraft({ phone: event.target.value })}
+                    placeholder="01XXXXXXXXX"
+                  />
 
-                <label className="flex flex-col gap-1.5">
-                  <span className="text-xs font-medium text-slate-600">Apply To Sale (Optional)</span>
-                  <select
-                    className="h-10 rounded-lg border border-slate-300 px-3 text-sm"
-                    value={saleId}
-                    onChange={(event) => setSaleId(event.target.value)}
-                  >
-                    <option value="">Auto allocate to oldest due sales</option>
-                    {history.outstanding_sales.map((sale) => (
-                      <option key={sale.id} value={sale.id}>
-                        Sale #{sale.id} - Due {formatTaka(sale.due)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                  <Input
+                    label="Name"
+                    value={activeCustomerDraft.name}
+                    onChange={(event) => updateActiveCustomerDraft({ name: event.target.value })}
+                    placeholder="Customer name"
+                  />
 
-                <Input
-                  label="Note"
-                  value={note}
-                  onChange={(event) => setNote(event.target.value)}
-                  placeholder="Optional note"
-                  className="md:col-span-2"
-                />
-              </div>
+                  <Input
+                    label="Address"
+                    value={activeCustomerDraft.address}
+                    onChange={(event) => updateActiveCustomerDraft({ address: event.target.value })}
+                    placeholder="Customer address"
+                    className="md:col-span-2"
+                  />
 
-              <div className="mt-4 flex items-center justify-between gap-3">
-                <p className="text-xs text-slate-500">
-                  Outstanding due: <span className="font-semibold text-amber-700">{formatTaka(history.customer.due)}</span>
-                </p>
-                <Button onClick={() => collectDueMutation.mutate()} disabled={collectDueMutation.isPending}>
-                  {collectDueMutation.isPending ? "Collecting..." : "Collect Due"}
-                </Button>
-              </div>
-            </Card>
+                  <label className="flex flex-col gap-1.5 md:col-span-2">
+                    <span className="text-xs font-medium text-slate-600">Customer Note</span>
+                    <textarea
+                      value={activeCustomerDraft.note}
+                      onChange={(event) => updateActiveCustomerDraft({ note: event.target.value })}
+                      placeholder="Internal note for this customer"
+                      rows={4}
+                      className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    />
+                  </label>
+                </div>
+
+                <div className="mt-4 flex items-center justify-end">
+                  <Button onClick={() => updateCustomerMutation.mutate()} disabled={updateCustomerMutation.isPending}>
+                    {updateCustomerMutation.isPending ? "Updating..." : "Update Customer"}
+                  </Button>
+                </div>
+              </Card>
+            ) : (
+              <Card className="p-4 text-sm text-amber-700">
+                You have view-only access for customers. Ask admin to grant customer edit permission.
+              </Card>
+            )}
+
+            {canEditCustomer ? (
+              <Card className="p-4">
+                <h4 className="text-sm font-semibold text-slate-900">Collect Due Payment</h4>
+
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <Input
+                    label="Amount"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={amount}
+                    onChange={(event) => setAmount(event.target.value)}
+                    placeholder="0.00"
+                  />
+
+                  <label className="flex flex-col gap-1.5">
+                    <span className="text-xs font-medium text-slate-600">Apply To Sale (Optional)</span>
+                    <select
+                      className="h-10 rounded-lg border border-slate-300 px-3 text-sm"
+                      value={saleId}
+                      onChange={(event) => setSaleId(event.target.value)}
+                    >
+                      <option value="">Auto allocate to oldest due sales</option>
+                      {history.outstanding_sales.map((sale) => (
+                        <option key={sale.id} value={sale.id}>
+                          Sale #{sale.id} - Due {formatTaka(sale.due)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <Input
+                    label="Note"
+                    value={note}
+                    onChange={(event) => setNote(event.target.value)}
+                    placeholder="Optional note"
+                    className="md:col-span-2"
+                  />
+                </div>
+
+                <div className="mt-4 flex items-center justify-between gap-3">
+                  <p className="text-xs text-slate-500">
+                    Outstanding due: <span className="font-semibold text-amber-700">{formatTaka(history.customer.due)}</span>
+                  </p>
+                  <Button onClick={() => collectDueMutation.mutate()} disabled={collectDueMutation.isPending}>
+                    {collectDueMutation.isPending ? "Collecting..." : "Collect Due"}
+                  </Button>
+                </div>
+              </Card>
+            ) : null}
 
             <Card className="overflow-hidden">
               <div className="border-b border-slate-200 px-4 py-3">
@@ -495,7 +774,11 @@ export default function CustomersPage() {
                     ) : (
                       history.sales.map((sale) => (
                         <tr key={sale.id} className="border-t border-slate-100">
-                          <td className="px-3 py-2 font-medium text-slate-900">#{sale.id}</td>
+                          <td className="px-3 py-2 font-medium text-slate-900">
+                            <Link href={`/sales?saleId=${sale.id}`} className="text-blue-700 hover:underline">
+                              #{sale.id}
+                            </Link>
+                          </td>
                           <td className="px-3 py-2 text-right tabular-nums">{formatTaka(sale.total)}</td>
                           <td className="px-3 py-2 text-right tabular-nums">{formatTaka(sale.paid)}</td>
                           <td className="px-3 py-2 text-right tabular-nums text-amber-700">
@@ -537,7 +820,11 @@ export default function CustomersPage() {
                         <tr key={payment.id} className="border-t border-slate-100">
                           <td className="px-3 py-2 text-xs text-slate-600">{payment.note || "-"}</td>
                           <td className="px-3 py-2 text-slate-700">
-                            {payment.sale_id ? `#${payment.sale_id}` : "Auto"}
+                            {payment.sale_id ? (
+                              <Link href={`/sales?saleId=${payment.sale_id}`} className="text-blue-700 hover:underline">
+                                #{payment.sale_id}
+                              </Link>
+                            ) : "Auto"}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums text-emerald-700">
                             {formatTaka(payment.amount)}
@@ -556,6 +843,7 @@ export default function CustomersPage() {
           </>
         ) : null}
       </section>
+      </div>
     </div>
   );
 }

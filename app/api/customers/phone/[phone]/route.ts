@@ -1,5 +1,6 @@
 import type { RowDataPacket } from "mysql2/promise";
 import type { NextRequest } from "next/server";
+import { z } from "zod";
 import { ApiError } from "@/lib/server/errors";
 import { dbQuery } from "@/lib/server/db";
 import { assertPermission } from "@/lib/server/permissions";
@@ -11,6 +12,7 @@ interface CustomerRow extends RowDataPacket {
   name: string | null;
   phone: string;
   address: string | null;
+  note: string | null;
   type: "VIP" | "Regular" | "Wholesale";
   due: string;
   loyalty_points: number;
@@ -50,6 +52,18 @@ function decodePhone(phoneParam: string) {
   return decodeURIComponent(phoneParam).trim();
 }
 
+const updateCustomerSchema = z.object({
+  phone: z.string().min(8).max(40),
+  name: z.string().max(191).nullable().optional(),
+  address: z.string().max(255).nullable().optional(),
+  note: z.string().max(2000).nullable().optional(),
+});
+
+function cleanText(value?: string | null) {
+  const text = value?.trim();
+  return text ? text : null;
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ phone: string }> },
@@ -66,7 +80,7 @@ export async function GET(
     }
 
     const customerRows = await dbQuery<CustomerRow[]>(
-      `SELECT id, name, phone, address, type, due, loyalty_points, is_active, created_at, updated_at
+      `SELECT id, name, phone, address, note, type, due, loyalty_points, is_active, created_at, updated_at
        FROM customers
        WHERE phone = ?
        LIMIT 1`,
@@ -131,6 +145,94 @@ export async function GET(
       sales,
       outstanding_sales: outstandingSales,
       due_payments: duePayments,
+    });
+  } catch (error) {
+    return handleApiError(error);
+  }
+}
+
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ phone: string }> },
+) {
+  try {
+    const user = await requireUserFromRequest(request);
+    await assertPermission(user, "customers", "edit");
+
+    const resolvedParams = await params;
+    const currentPhone = decodePhone(resolvedParams.phone);
+
+    if (!currentPhone) {
+      throw new ApiError(400, "Customer phone is required");
+    }
+
+    const body = await request.json().catch(() => {
+      throw new ApiError(400, "Invalid JSON body");
+    });
+
+    const parsed = updateCustomerSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new ApiError(422, parsed.error.issues[0]?.message ?? "Invalid customer payload");
+    }
+
+    const nextPhone = parsed.data.phone.trim();
+    const nextName = cleanText(parsed.data.name);
+    const nextAddress = cleanText(parsed.data.address);
+    const nextNote = cleanText(parsed.data.note);
+
+    if (!nextPhone) {
+      throw new ApiError(422, "Customer phone is required");
+    }
+
+    const currentRows = await dbQuery<CustomerRow[]>(
+      `SELECT id, name, phone, address, note, type, due, loyalty_points, is_active, created_at, updated_at
+       FROM customers
+       WHERE phone = ?
+       LIMIT 1`,
+      [currentPhone],
+    );
+
+    const existingCustomer = currentRows[0];
+    if (!existingCustomer) {
+      throw new ApiError(404, "Customer not found");
+    }
+
+    if (nextPhone !== currentPhone) {
+      const duplicateRows = await dbQuery<Array<RowDataPacket & { id: string }>>(
+        `SELECT id
+         FROM customers
+         WHERE phone = ? AND id <> ?
+         LIMIT 1`,
+        [nextPhone, existingCustomer.id],
+      );
+
+      if (duplicateRows[0]) {
+        throw new ApiError(409, "Phone already exists for another customer");
+      }
+    }
+
+    await dbQuery(
+      `UPDATE customers
+       SET phone = ?, name = ?, address = ?, note = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [nextPhone, nextName, nextAddress, nextNote, existingCustomer.id],
+    );
+
+    const updatedRows = await dbQuery<CustomerRow[]>(
+      `SELECT id, name, phone, address, note, type, due, loyalty_points, is_active, created_at, updated_at
+       FROM customers
+       WHERE id = ?
+       LIMIT 1`,
+      [existingCustomer.id],
+    );
+
+    const updatedCustomer = updatedRows[0];
+    if (!updatedCustomer) {
+      throw new ApiError(500, "Failed to load updated customer");
+    }
+
+    return jsonOk({
+      customer: updatedCustomer,
     });
   } catch (error) {
     return handleApiError(error);

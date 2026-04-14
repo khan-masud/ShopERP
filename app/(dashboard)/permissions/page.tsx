@@ -279,7 +279,12 @@ export default function PermissionsPage() {
       </div>
 
       <Card className="p-4 text-sm text-slate-700">
-        Only admin can access this screen. Changes are applied to the <span className="font-semibold">staff</span> role.
+        <p>
+          Only admin can access this screen. Changes are applied to the <span className="font-semibold">staff</span> role.
+        </p>
+        <p className="mt-2 text-xs text-slate-500">
+          Customers module <span className="font-semibold">Edit</span> permission controls CRM customer update and due collection actions.
+        </p>
       </Card>
 
       {isLoading ? <Card className="p-5 text-sm text-slate-500">Loading permission matrix...</Card> : null}
