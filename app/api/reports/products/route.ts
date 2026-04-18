@@ -17,6 +17,10 @@ interface ProductProfitRow extends RowDataPacket {
   margin_percent: string;
 }
 
+interface ProductCountRow extends RowDataPacket {
+  total_count: number;
+}
+
 type SortBy = "profit" | "margin";
 
 function isValidDateInput(value: string) {
@@ -64,6 +68,15 @@ function parseLimit(input: string | null) {
   return Math.min(Math.max(Math.floor(parsed), 1), 100);
 }
 
+function parsePage(input: string | null) {
+  const parsed = Number(input ?? 1);
+  if (!Number.isFinite(parsed)) {
+    return 1;
+  }
+
+  return Math.min(Math.max(Math.floor(parsed), 1), 100000);
+}
+
 export async function GET(request: NextRequest) {
   try {
     const user = await requireUserFromRequest(request);
@@ -86,11 +99,25 @@ export async function GET(request: NextRequest) {
     const sortByParam = searchParams.get("sortBy")?.trim();
     const sortBy: SortBy = sortByParam === "margin" ? "margin" : "profit";
     const limit = parseLimit(searchParams.get("limit"));
+    const requestedPage = parsePage(searchParams.get("page"));
 
     const orderBy =
       sortBy === "margin"
         ? "ORDER BY margin_percent DESC, gross_profit DESC"
         : "ORDER BY gross_profit DESC, margin_percent DESC";
+
+    const countRows = await dbQuery<ProductCountRow[]>(
+      `SELECT COUNT(DISTINCT si.product_id) AS total_count
+       FROM sale_items si
+       INNER JOIN sales s ON s.id = si.sale_id
+       WHERE DATE(s.created_at) BETWEEN ? AND ?`,
+      [from, to],
+    );
+
+    const totalCount = Number(countRows[0]?.total_count ?? 0);
+    const totalPages = Math.max(Math.ceil(totalCount / limit), 1);
+    const page = Math.min(requestedPage, totalPages);
+    const offset = (page - 1) * limit;
 
     const rows = await dbQuery<ProductProfitRow[]>(
       `SELECT
@@ -112,12 +139,12 @@ export async function GET(request: NextRequest) {
        WHERE DATE(s.created_at) BETWEEN ? AND ?
        GROUP BY si.product_id, si.product_name
        ${orderBy}
-       LIMIT ?`,
-      [from, to, limit],
+       LIMIT ? OFFSET ?`,
+      [from, to, limit, offset],
     );
 
     const products = rows.map((row, index) => ({
-      rank: index + 1,
+      rank: offset + index + 1,
       product_id: row.product_id,
       product_name: row.product_name,
       total_quantity: Number(row.total_quantity ?? 0),
@@ -137,6 +164,11 @@ export async function GET(request: NextRequest) {
       meta: {
         count: products.length,
         limit,
+        page,
+        total_count: totalCount,
+        total_pages: totalPages,
+        has_next: page < totalPages,
+        has_prev: page > 1,
       },
     });
   } catch (error) {

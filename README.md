@@ -65,6 +65,7 @@ Open http://localhost:3000
 - /customers
 - /sales
 - /reports
+- /analytics
 - /expenses
 - /stock
 - /audit

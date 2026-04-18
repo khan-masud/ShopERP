@@ -10,6 +10,7 @@ import {
   FileClock,
   HandCoins,
   LayoutDashboard,
+  LineChart,
   ReceiptText,
   Settings2,
   Shield,
@@ -85,6 +86,7 @@ export function Sidebar({
     { href: "/customers", label: "Customers", icon: Users, moduleKey: "customers", requiredAction: "view" },
     { href: "/sales", label: "Sales History", icon: FileClock, moduleKey: "sales", requiredAction: "view" },
     { href: "/reports", label: "Reports", icon: BarChart3, moduleKey: "reports", requiredAction: "view" },
+    { href: "/analytics", label: "Analytics", icon: LineChart, moduleKey: "reports", requiredAction: "view" },
     { href: "/expenses", label: "Expenses", icon: HandCoins, moduleKey: "expenses", requiredAction: "view" },
     { href: "/audit", label: "Audit Logs", icon: Shield, moduleKey: "audit", requiredAction: "view" },
   ];

@@ -11,6 +11,7 @@ const protectedPagePrefixes = [
   "/customers",
   "/sales",
   "/reports",
+  "/analytics",
   "/expenses",
   "/audit",
   "/staff-summary",
@@ -88,5 +89,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/login", "/dashboard/:path*", "/products/:path*", "/stock/:path*", "/pos/:path*", "/customers/:path*", "/sales/:path*", "/reports/:path*", "/expenses/:path*", "/audit/:path*", "/staff-summary/:path*", "/users/:path*", "/permissions/:path*", "/api/:path*"],
+  matcher: ["/login", "/dashboard/:path*", "/products/:path*", "/stock/:path*", "/pos/:path*", "/customers/:path*", "/sales/:path*", "/reports/:path*", "/analytics/:path*", "/expenses/:path*", "/audit/:path*", "/staff-summary/:path*", "/users/:path*", "/permissions/:path*", "/api/:path*"],
 };

@@ -17,6 +17,34 @@ interface NumberValueRow extends RowDataPacket {
   value: string;
 }
 
+interface StockSnapshotRow extends RowDataPacket {
+  total_products: number;
+  total_stock_units: string;
+  low_stock_count: number;
+  out_of_stock_count: number;
+  stock_value_buy: string;
+  stock_value_sell: string;
+}
+
+interface StockMovementRow extends RowDataPacket {
+  restocked_units: string;
+  sold_units: string;
+  adjustment_net_units: string;
+}
+
+interface ExpenseBreakdownRow extends RowDataPacket {
+  category: string;
+  expense_count: number;
+  total_amount: string;
+}
+
+interface DueCustomerRow extends RowDataPacket {
+  id: string;
+  name: string | null;
+  phone: string;
+  due: string;
+}
+
 interface SalesPeriodRow extends RowDataPacket {
   period: string | Date;
   sale_count: number;
@@ -113,6 +141,24 @@ function isValidDateInput(value: string) {
     candidate.getUTCMonth() + 1 === month &&
     candidate.getUTCDate() === day
   );
+}
+
+function parsePositiveInt(input: string | null, fallback: number, min: number, max: number) {
+  const parsed = Number(input);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  const integer = Math.floor(parsed);
+  if (integer < min) {
+    return min;
+  }
+
+  if (integer > max) {
+    return max;
+  }
+
+  return integer;
 }
 
 function getDefaultRange() {
@@ -233,6 +279,14 @@ export async function GET(request: NextRequest) {
     const groupByParam = searchParams.get("groupBy")?.trim();
     const groupBy: GroupBy = groupByParam === "month" ? "month" : "day";
 
+    const trendPageInput =
+      searchParams.get("trendPage")?.trim() || searchParams.get("page")?.trim() || null;
+    const trendPageSizeInput =
+      searchParams.get("trendPageSize")?.trim() || searchParams.get("pageSize")?.trim() || null;
+    const useTrendPagination = Boolean(trendPageInput || trendPageSizeInput);
+    const requestedTrendPage = parsePositiveInt(trendPageInput, 1, 1, 100000);
+    const requestedTrendPageSize = parsePositiveInt(trendPageSizeInput, 30, 5, 500);
+
     const salesPeriodExpr =
       groupBy === "day" ? "DATE(created_at)" : "DATE_FORMAT(created_at, '%Y-%m')";
     const profitPeriodExpr =
@@ -248,6 +302,12 @@ export async function GET(request: NextRequest) {
       dueCollectedRows,
       expenseRows,
       outstandingDueRows,
+      totalCustomersRows,
+      dueCustomersRows,
+      stockSnapshotRows,
+      stockMovementRows,
+      expenseBreakdownRows,
+      topDueCustomerRows,
       salesTrendRows,
       profitTrendRows,
       dueCollectedTrendRows,
@@ -286,6 +346,61 @@ export async function GET(request: NextRequest) {
         `SELECT COALESCE(SUM(due), 0) AS value
          FROM customers
          WHERE is_active = 1`,
+      ),
+      dbQuery<NumberValueRow[]>(
+        `SELECT COUNT(*) AS value
+         FROM customers
+         WHERE is_active = 1`,
+      ),
+      dbQuery<NumberValueRow[]>(
+        `SELECT COUNT(*) AS value
+         FROM customers
+         WHERE is_active = 1
+           AND due > 0`,
+      ),
+      dbQuery<StockSnapshotRow[]>(
+        `SELECT
+           COUNT(*) AS total_products,
+           COALESCE(SUM(stock), 0) AS total_stock_units,
+           COALESCE(SUM(CASE WHEN stock > 0 AND stock <= min_stock THEN 1 ELSE 0 END), 0) AS low_stock_count,
+           COALESCE(SUM(CASE WHEN stock <= 0 THEN 1 ELSE 0 END), 0) AS out_of_stock_count,
+           COALESCE(SUM(stock * buy_price), 0) AS stock_value_buy,
+           COALESCE(SUM(stock * sell_price), 0) AS stock_value_sell
+         FROM products
+         WHERE is_active = 1`,
+      ),
+      dbQuery<StockMovementRow[]>(
+        `SELECT
+           COALESCE(SUM(CASE WHEN change_type = 'restock' AND quantity_change > 0 THEN quantity_change ELSE 0 END), 0) AS restocked_units,
+           COALESCE(SUM(CASE WHEN change_type = 'sale' THEN ABS(quantity_change) ELSE 0 END), 0) AS sold_units,
+           COALESCE(SUM(CASE WHEN change_type = 'adjustment' THEN quantity_change ELSE 0 END), 0) AS adjustment_net_units
+         FROM stock_history
+         WHERE DATE(created_at) BETWEEN ? AND ?`,
+        [from, to],
+      ),
+      dbQuery<ExpenseBreakdownRow[]>(
+        `SELECT
+           category,
+           COUNT(*) AS expense_count,
+           COALESCE(SUM(amount), 0) AS total_amount
+         FROM expenses
+         WHERE expense_date BETWEEN ? AND ?
+           AND is_deleted = 0
+         GROUP BY category
+         ORDER BY total_amount DESC`,
+        [from, to],
+      ),
+      dbQuery<DueCustomerRow[]>(
+        `SELECT
+           id,
+           name,
+           phone,
+           due
+         FROM customers
+         WHERE is_active = 1
+           AND due > 0
+         ORDER BY due DESC, updated_at DESC
+         LIMIT 10`,
       ),
       dbQuery<SalesPeriodRow[]>(
         `SELECT
@@ -345,6 +460,17 @@ export async function GET(request: NextRequest) {
       groupBy,
     );
 
+    const trendTotalPoints = trend.length;
+    const trendPageSize = useTrendPagination
+      ? requestedTrendPageSize
+      : Math.max(trendTotalPoints, 1);
+    const trendTotalPages = Math.max(Math.ceil(trendTotalPoints / trendPageSize), 1);
+    const trendPage = Math.min(requestedTrendPage, trendTotalPages);
+    const trendOffset = (trendPage - 1) * trendPageSize;
+    const pagedTrend = useTrendPagination
+      ? trend.slice(trendOffset, trendOffset + trendPageSize)
+      : trend;
+
     const summarySales = salesSummaryRows[0];
     const salesTotal = roundMoney(toNumber(summarySales?.sales_total));
     const dueTotal = roundMoney(toNumber(summarySales?.due_total));
@@ -352,6 +478,23 @@ export async function GET(request: NextRequest) {
     const expenseTotal = roundMoney(toNumber(expenseRows[0]?.value));
     const grossProfit = roundMoney(toNumber(grossProfitRows[0]?.value));
     const netProfit = roundMoney(grossProfit - expenseTotal);
+    const revenueCollected = roundMoney(Math.max(salesTotal - dueTotal, 0) + dueCollected);
+    const netRevenue = roundMoney(revenueCollected - expenseTotal);
+
+    const stockSnapshot = stockSnapshotRows[0] ?? {
+      total_products: 0,
+      total_stock_units: "0",
+      low_stock_count: 0,
+      out_of_stock_count: 0,
+      stock_value_buy: "0",
+      stock_value_sell: "0",
+    };
+
+    const stockMovement = stockMovementRows[0] ?? {
+      restocked_units: "0",
+      sold_units: "0",
+      adjustment_net_units: "0",
+    };
 
     return jsonOk({
       range: {
@@ -367,11 +510,47 @@ export async function GET(request: NextRequest) {
         expense_total: expenseTotal,
         gross_profit: grossProfit,
         net_profit: netProfit,
+        revenue_collected: revenueCollected,
+        net_revenue: netRevenue,
+        total_customers: Number(totalCustomersRows[0]?.value ?? 0),
+        due_customers_count: Number(dueCustomersRows[0]?.value ?? 0),
         outstanding_due: roundMoney(toNumber(outstandingDueRows[0]?.value)),
       },
-      trend,
+      trend: pagedTrend,
+      inventory: {
+        snapshot: {
+          total_products: Number(stockSnapshot.total_products ?? 0),
+          total_stock_units: roundMoney(toNumber(stockSnapshot.total_stock_units)),
+          low_stock_count: Number(stockSnapshot.low_stock_count ?? 0),
+          out_of_stock_count: Number(stockSnapshot.out_of_stock_count ?? 0),
+          stock_value_buy: roundMoney(toNumber(stockSnapshot.stock_value_buy)),
+          stock_value_sell: roundMoney(toNumber(stockSnapshot.stock_value_sell)),
+        },
+        movement: {
+          restocked_units: roundMoney(toNumber(stockMovement.restocked_units)),
+          sold_units: roundMoney(toNumber(stockMovement.sold_units)),
+          adjustment_net_units: roundMoney(toNumber(stockMovement.adjustment_net_units)),
+        },
+      },
+      expense_breakdown: expenseBreakdownRows.map((row) => ({
+        category: row.category,
+        expense_count: Number(row.expense_count ?? 0),
+        total_amount: roundMoney(toNumber(row.total_amount)),
+      })),
+      top_due_customers: topDueCustomerRows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        phone: row.phone,
+        due: roundMoney(toNumber(row.due)),
+      })),
       meta: {
-        points: trend.length,
+        points: pagedTrend.length,
+        total_points: trendTotalPoints,
+        page: trendPage,
+        page_size: trendPageSize,
+        total_pages: trendTotalPages,
+        has_next: trendPage < trendTotalPages,
+        has_prev: trendPage > 1,
       },
     });
   } catch (error) {
