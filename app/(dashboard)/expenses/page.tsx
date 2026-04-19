@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { Button } from "@/components/ui/Button";
@@ -34,6 +34,10 @@ type ExpensesResponse = {
   summary: {
     expense_count: number;
     total_amount: number;
+    current_month_expense_count: number;
+    current_month_total_amount: number;
+    current_month_top_category: ExpenseCategory | null;
+    current_month_top_category_total_amount: number;
   };
   categories: CategorySummaryItem[];
 };
@@ -53,6 +57,29 @@ function formatInputDate(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function normalizeDateInput(value: string) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value;
+  }
+
+  if (value.length >= 10) {
+    return value.slice(0, 10);
+  }
+
+  return formatInputDate(new Date());
+}
+
+function getCurrentMonthRange() {
+  const now = new Date();
+  const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+  return {
+    from: formatInputDate(firstDay),
+    to: formatInputDate(lastDay),
+  };
 }
 
 async function fetchExpenses(filters: {
@@ -106,6 +133,13 @@ export default function ExpensesPage() {
   const [expenseCategory, setExpenseCategory] = useState<ExpenseCategory>("Purchase");
   const [expenseDate, setExpenseDate] = useState(formatInputDate(new Date()));
   const [note, setNote] = useState("");
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editAmount, setEditAmount] = useState("");
+  const [editExpenseCategory, setEditExpenseCategory] = useState<ExpenseCategory>("Purchase");
+  const [editExpenseDate, setEditExpenseDate] = useState(formatInputDate(new Date()));
+  const [editNote, setEditNote] = useState("");
 
   const {
     data,
@@ -167,6 +201,59 @@ export default function ExpensesPage() {
     },
   });
 
+  const updateExpenseMutation = useMutation({
+    mutationFn: async () => {
+      if (!editingExpenseId) {
+        throw new Error("No expense selected for edit");
+      }
+
+      const parsedAmount = Number(editAmount);
+
+      if (!editTitle.trim()) {
+        throw new Error("Expense title is required");
+      }
+
+      if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+        throw new Error("Enter a valid amount");
+      }
+
+      const res = await fetch(`/api/expenses/${editingExpenseId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title: editTitle.trim(),
+          amount: parsedAmount,
+          category: editExpenseCategory,
+          note: editNote.trim() || null,
+          expense_date: editExpenseDate,
+        }),
+      });
+
+      const payload = (await res.json()) as ApiSuccess<{ expense: ExpenseItem }> | ApiErrorPayload;
+
+      if (!res.ok || !payload.success) {
+        throw new Error((payload as ApiErrorPayload).message ?? "Failed to update expense");
+      }
+
+      return payload.data;
+    },
+    onSuccess: async () => {
+      toast.success("Expense updated");
+      closeEditModal();
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["expenses-module"] }),
+        queryClient.invalidateQueries({ queryKey: ["reports-overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["reports-range"] }),
+      ]);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+
   const deleteExpenseMutation = useMutation({
     mutationFn: async (expenseId: string) => {
       const res = await fetch(`/api/expenses/${expenseId}`, {
@@ -204,84 +291,75 @@ export default function ExpensesPage() {
     deleteExpenseMutation.mutate(expense.id);
   }
 
-  const expenses = data?.expenses ?? [];
-  const summary = data?.summary ?? { expense_count: 0, total_amount: 0 };
-  const categories = useMemo(() => data?.categories ?? [], [data]);
+  function startEditingExpense(expense: ExpenseItem) {
+    setEditingExpenseId(expense.id);
+    setEditTitle(expense.title);
+    setEditAmount(String(expense.amount ?? ""));
+    setEditExpenseCategory(expense.category);
+    setEditExpenseDate(normalizeDateInput(String(expense.expense_date ?? "")));
+    setEditNote(expense.note ?? "");
+    setIsEditModalOpen(true);
+  }
 
-  const topCategory = useMemo(() => categories[0] ?? null, [categories]);
+  function closeEditModal() {
+    setIsEditModalOpen(false);
+    setEditingExpenseId(null);
+    setEditTitle("");
+    setEditAmount("");
+    setEditExpenseCategory("Purchase");
+    setEditExpenseDate(formatInputDate(new Date()));
+    setEditNote("");
+  }
+
+  function applyCurrentMonthFilter() {
+    const range = getCurrentMonthRange();
+    setSearch("");
+    setCategory("");
+    setFromDate(range.from);
+    setToDate(range.to);
+  }
+
+  const expenses = data?.expenses ?? [];
+  const summary = data?.summary ?? {
+    expense_count: 0,
+    total_amount: 0,
+    current_month_expense_count: 0,
+    current_month_total_amount: 0,
+    current_month_top_category: null,
+    current_month_top_category_total_amount: 0,
+  };
 
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="text-2xl font-semibold text-slate-900">Expense Management</h2>
-        <p className="text-sm text-slate-500">Track expenses, monitor totals, and maintain accurate net profit data</p>
-      </div>
-
-      <Card className="p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-          <Input
-            label="Search"
-            placeholder="Title or note"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className="xl:col-span-2"
-          />
-
-          <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-slate-600">Category</span>
-            <select
-              className="h-10 rounded-lg border border-slate-300 px-3 text-sm"
-              value={category}
-              onChange={(event) => setCategory(event.target.value)}
-            >
-              <option value="">All Categories</option>
-              {expenseCategories.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <Input
-            label="From"
-            type="date"
-            value={fromDate}
-            onChange={(event) => setFromDate(event.target.value)}
-          />
-
-          <Input
-            label="To"
-            type="date"
-            value={toDate}
-            onChange={(event) => setToDate(event.target.value)}
-          />
-        </div>
-
-        <div className="mt-3 flex justify-end">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setSearch("");
-              setCategory("");
-              setFromDate("");
-              setToDate("");
-            }}
-          >
-            Clear Filters
-          </Button>
-        </div>
-      </Card>
-
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        <StatCard title="Expense Entries" value={String(summary.expense_count)} accent="blue" />
-        <StatCard title="Total Expense" value={formatTaka(summary.total_amount)} accent="red" />
-        <StatCard
-          title="Top Category"
-          value={topCategory ? `${topCategory.category} (${formatTaka(topCategory.total_amount)})` : "N/A"}
-          accent="orange"
-        />
+        <button type="button" className="text-left" onClick={applyCurrentMonthFilter}>
+          <StatCard
+            title="Current Month Entries"
+            value={String(summary.current_month_expense_count)}
+            accent="blue"
+            hint="Click to filter current month"
+          />
+        </button>
+        <button type="button" className="text-left" onClick={applyCurrentMonthFilter}>
+          <StatCard
+            title="Current Month Expense"
+            value={formatTaka(summary.current_month_total_amount)}
+            accent="red"
+            hint="Click to filter current month"
+          />
+        </button>
+        <button type="button" className="text-left" onClick={applyCurrentMonthFilter}>
+          <StatCard
+            title="Current Month Top Category"
+            value={
+              summary.current_month_top_category
+                ? `${summary.current_month_top_category} (${formatTaka(summary.current_month_top_category_total_amount)})`
+                : "N/A"
+            }
+            accent="orange"
+            hint="Click to filter current month"
+          />
+        </button>
       </div>
 
       <Card className="p-4">
@@ -336,9 +414,66 @@ export default function ExpensesPage() {
             className="md:col-span-2 xl:col-span-4"
           />
 
-          <div className="flex items-end justify-end">
+          <div className="md:col-span-2 xl:col-span-5 flex items-end justify-center">
             <Button onClick={() => addExpenseMutation.mutate()} disabled={addExpenseMutation.isPending}>
               {addExpenseMutation.isPending ? "Saving..." : "Add Expense"}
+            </Button>
+          </div>
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <Input
+            label="Search"
+            placeholder="Title or note"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-slate-600">Category</span>
+            <select
+              className="h-10 rounded-lg border border-slate-300 px-3 text-sm"
+              value={category}
+              onChange={(event) => setCategory(event.target.value)}
+            >
+              <option value="">All Categories</option>
+              {expenseCategories.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <Input
+            label="From"
+            type="date"
+            value={fromDate}
+            onChange={(event) => setFromDate(event.target.value)}
+          />
+
+          <Input
+            label="To"
+            type="date"
+            value={toDate}
+            onChange={(event) => setToDate(event.target.value)}
+          />
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-transparent select-none">Action</span>
+            <Button
+              variant="ghost"
+              className="h-10 w-full"
+              onClick={() => {
+                setSearch("");
+                setCategory("");
+                setFromDate("");
+                setToDate("");
+              }}
+            >
+              Clear Filters
             </Button>
           </div>
         </div>
@@ -376,21 +511,31 @@ export default function ExpensesPage() {
                 ) : (
                   expenses.map((item) => (
                     <tr key={item.id} className="border-t border-slate-100">
-                      <td className="px-3 py-2 text-xs text-slate-500">{formatDateTime(item.expense_date)}</td>
+                      <td className="px-3 py-2 text-xs text-slate-500">{formatDateTime(item.created_at)}</td>
                       <td className="px-3 py-2 font-medium text-slate-900">{item.title}</td>
                       <td className="px-3 py-2 text-slate-700">{item.category}</td>
                       <td className="px-3 py-2 text-right tabular-nums text-red-700">{formatTaka(item.amount)}</td>
                       <td className="px-3 py-2 text-slate-700">{item.created_by_name || "System"}</td>
                       <td className="px-3 py-2 text-xs text-slate-600">{item.note || "-"}</td>
                       <td className="px-3 py-2 text-right">
-                        <Button
-                          size="sm"
-                          variant="danger"
-                          onClick={() => confirmAndDeleteExpense(item)}
-                          disabled={deleteExpenseMutation.isPending}
-                        >
-                          Delete
-                        </Button>
+                        <div className="flex items-center justify-end gap-2">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => startEditingExpense(item)}
+                            disabled={deleteExpenseMutation.isPending || updateExpenseMutation.isPending}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            onClick={() => confirmAndDeleteExpense(item)}
+                            disabled={deleteExpenseMutation.isPending || updateExpenseMutation.isPending}
+                          >
+                            Delete
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -400,6 +545,79 @@ export default function ExpensesPage() {
           </div>
         ) : null}
       </Card>
+      {isEditModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <Card className="w-full max-w-3xl p-4">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-slate-900">Edit Expense</h3>
+              <Button variant="ghost" size="sm" onClick={closeEditModal} disabled={updateExpenseMutation.isPending}>
+                Close
+              </Button>
+            </div>
+
+            <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+              <Input
+                label="Title"
+                placeholder="e.g. Monthly electricity bill"
+                value={editTitle}
+                onChange={(event) => setEditTitle(event.target.value)}
+                className="xl:col-span-2"
+              />
+
+              <Input
+                label="Amount"
+                type="number"
+                min={0}
+                step="0.01"
+                value={editAmount}
+                onChange={(event) => setEditAmount(event.target.value)}
+                placeholder="0.00"
+              />
+
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-medium text-slate-600">Category</span>
+                <select
+                  className="h-10 rounded-lg border border-slate-300 px-3 text-sm"
+                  value={editExpenseCategory}
+                  onChange={(event) => setEditExpenseCategory(event.target.value as ExpenseCategory)}
+                >
+                  {expenseCategories.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <Input
+                label="Expense Date"
+                type="date"
+                value={editExpenseDate}
+                onChange={(event) => setEditExpenseDate(event.target.value)}
+              />
+
+              <Input
+                label="Note"
+                value={editNote}
+                onChange={(event) => setEditNote(event.target.value)}
+                placeholder="Optional"
+                className="md:col-span-2 xl:col-span-4"
+              />
+
+              <div className="md:col-span-2 xl:col-span-5 flex items-end justify-center">
+                <div className="flex items-center gap-2">
+                  <Button onClick={() => updateExpenseMutation.mutate()} disabled={updateExpenseMutation.isPending}>
+                    {updateExpenseMutation.isPending ? "Saving..." : "Update Expense"}
+                  </Button>
+                  <Button variant="ghost" onClick={closeEditModal} disabled={updateExpenseMutation.isPending}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </Card>
+        </div>
+      ) : null}
     </div>
   );
 }

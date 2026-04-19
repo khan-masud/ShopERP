@@ -71,7 +71,7 @@ const defaultActionSupport: ActionSupportMap = {
   customers: { can_view: true, can_add: false, can_edit: true, can_delete: false },
   sales: { can_view: true, can_add: true, can_edit: true, can_delete: false },
   reports: { can_view: true, can_add: false, can_edit: false, can_delete: false },
-  expenses: { can_view: true, can_add: true, can_edit: false, can_delete: true },
+  expenses: { can_view: true, can_add: true, can_edit: true, can_delete: true },
   audit: { can_view: true, can_add: false, can_edit: false, can_delete: false },
   stock: { can_view: true, can_add: false, can_edit: true, can_delete: false },
   permissions: { can_view: false, can_add: false, can_edit: false, can_delete: false },

@@ -58,7 +58,7 @@ export const MODULE_ACTION_SUPPORT: Record<ModuleKey, ModuleActionSupport> = {
   expenses: {
     can_view: true,
     can_add: true,
-    can_edit: false,
+    can_edit: true,
     can_delete: true,
   },
   audit: {

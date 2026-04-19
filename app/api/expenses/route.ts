@@ -31,6 +31,16 @@ interface SummaryRow extends RowDataPacket {
   total_amount: string;
 }
 
+interface CurrentMonthSummaryRow extends RowDataPacket {
+  expense_count: number;
+  total_amount: string;
+}
+
+interface CurrentMonthCategoryRow extends RowDataPacket {
+  category: ExpenseCategory;
+  total_amount: string;
+}
+
 interface CategorySummaryRow extends RowDataPacket {
   category: ExpenseCategory;
   expense_count: number;
@@ -125,7 +135,13 @@ export async function GET(request: NextRequest) {
 
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    const [expenses, summaryRows, categoryRows] = await Promise.all([
+    const [
+      expenses,
+      summaryRows,
+      categoryRows,
+      currentMonthSummaryRows,
+      currentMonthCategoryRows,
+    ] = await Promise.all([
       dbQuery<ExpenseRow[]>(
         `SELECT
            e.id,
@@ -162,15 +178,42 @@ export async function GET(request: NextRequest) {
          ORDER BY total_amount DESC`,
         values,
       ),
+      dbQuery<CurrentMonthSummaryRow[]>(
+        `SELECT
+           COUNT(*) AS expense_count,
+           COALESCE(SUM(e.amount), 0) AS total_amount
+         FROM expenses e
+         WHERE e.is_deleted = 0
+           AND YEAR(e.expense_date) = YEAR(CURDATE())
+           AND MONTH(e.expense_date) = MONTH(CURDATE())`,
+      ),
+      dbQuery<CurrentMonthCategoryRow[]>(
+        `SELECT
+           e.category,
+           COALESCE(SUM(e.amount), 0) AS total_amount
+         FROM expenses e
+         WHERE e.is_deleted = 0
+           AND YEAR(e.expense_date) = YEAR(CURDATE())
+           AND MONTH(e.expense_date) = MONTH(CURDATE())
+         GROUP BY e.category
+         ORDER BY total_amount DESC
+         LIMIT 1`,
+      ),
     ]);
 
     const summary = summaryRows[0] ?? { expense_count: 0, total_amount: "0.00" };
+    const currentMonthSummary = currentMonthSummaryRows[0] ?? { expense_count: 0, total_amount: "0.00" };
+    const currentMonthTopCategory = currentMonthCategoryRows[0] ?? null;
 
     return jsonOk({
       expenses,
       summary: {
         expense_count: Number(summary.expense_count ?? 0),
         total_amount: roundMoney(Number(summary.total_amount ?? 0)),
+        current_month_expense_count: Number(currentMonthSummary.expense_count ?? 0),
+        current_month_total_amount: roundMoney(Number(currentMonthSummary.total_amount ?? 0)),
+        current_month_top_category: currentMonthTopCategory?.category ?? null,
+        current_month_top_category_total_amount: roundMoney(Number(currentMonthTopCategory?.total_amount ?? 0)),
       },
       categories: categoryRows.map((row) => ({
         category: row.category,
