@@ -214,7 +214,7 @@ export default function StaffSummaryPage() {
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard title="Range" value={rangeLabelMap[data?.range ?? range]} accent="blue" />
         <StatCard title="Staff" value={String(summary.total_staff)} accent="green" />
-        <StatCard title="Invoices" value={String(summary.sale_count)} accent="orange" />
+        <StatCard title="Sell" value={String(summary.sale_count)} accent="orange" />
         <StatCard title="Total Sales" value={formatTaka(summary.total_sales)} accent="blue" />
       </div>
 
@@ -233,7 +233,7 @@ export default function StaffSummaryPage() {
                 <tr>
                   <th className="px-3 py-2 text-left">Staff</th>
                   <th className="px-3 py-2 text-left">Status</th>
-                  <th className="px-3 py-2 text-right">Invoices</th>
+                  <th className="px-3 py-2 text-right">Sell</th>
                   <th className="px-3 py-2 text-right">Total Sales</th>
                   <th className="px-3 py-2 text-right">Total Paid</th>
                   <th className="px-3 py-2 text-right">Total Due</th>

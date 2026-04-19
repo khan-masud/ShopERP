@@ -109,7 +109,7 @@ function buildSlipHtml(summary: CheckoutModalSummary) {
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Invoice #${summary.sale_id}</title>
+    <title>Sell #${summary.sale_id}</title>
     <style>
       body { font-family: Arial, sans-serif; padding: 16px; color: #0f172a; }
       h1 { margin: 0 0 4px; font-size: 18px; }
@@ -124,7 +124,7 @@ function buildSlipHtml(summary: CheckoutModalSummary) {
     </style>
   </head>
   <body>
-    <h1>ShopERP Invoice</h1>
+    <h1>ShopERP Sell</h1>
     <p><strong>Sale:</strong> #${summary.sale_id}</p>
     <p><strong>Date:</strong> ${escapeHtml(formatDateTime(summary.completed_at))}</p>
     <p><strong>Phone:</strong> ${escapeHtml(summary.customer_phone)}</p>

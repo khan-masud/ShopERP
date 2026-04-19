@@ -6,13 +6,39 @@ export function formatTaka(value: number | string) {
   }).format(Number.isFinite(numeric) ? numeric : 0)}`;
 }
 
-export function formatDateTime(value: string | Date) {
+function toDate(value: string | Date) {
   const date = value instanceof Date ? value : new Date(value);
-  return new Intl.DateTimeFormat("en-BD", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date;
+}
+
+export function formatDate(value: string | Date) {
+  const date = toDate(value);
+  if (!date) {
+    return "-";
+  }
+
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+
+  return `${day}-${month}-${year}`;
+}
+
+export function formatDateTime(value: string | Date) {
+  const date = toDate(value);
+  if (!date) {
+    return "-";
+  }
+
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+
+  return `${day}-${month}-${year} ${hours}:${minutes}`;
 }

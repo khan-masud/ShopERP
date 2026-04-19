@@ -740,7 +740,7 @@ export default function CustomersPage() {
 
                 <div className="mt-4 flex items-center justify-between gap-3">
                   <p className="text-xs text-slate-500">
-                    Outstanding due: <span className="font-semibold text-amber-700">{formatTaka(history.customer.due)}</span>
+                    Total due: <span className="font-semibold text-amber-700">{formatTaka(history.customer.due)}</span>
                   </p>
                   <Button onClick={() => collectDueMutation.mutate()} disabled={collectDueMutation.isPending}>
                     {collectDueMutation.isPending ? "Collecting..." : "Collect Due"}

@@ -39,10 +39,21 @@ interface ExpenseBreakdownRow extends RowDataPacket {
 }
 
 interface DueCustomerRow extends RowDataPacket {
-  id: string;
+  customer_key: string;
   name: string | null;
   phone: string;
   due: string;
+}
+
+interface StockChangeRow extends RowDataPacket {
+  product_id: string;
+  product_name: string;
+  entry_count: number;
+  restocked_units: string;
+  sold_units: string;
+  adjustment_units: string;
+  net_change_units: string;
+  last_changed_at: string;
 }
 
 interface SalesPeriodRow extends RowDataPacket {
@@ -308,6 +319,7 @@ export async function GET(request: NextRequest) {
       stockMovementRows,
       expenseBreakdownRows,
       topDueCustomerRows,
+      stockChangeRows,
       salesTrendRows,
       profitTrendRows,
       dueCollectedTrendRows,
@@ -392,15 +404,35 @@ export async function GET(request: NextRequest) {
       ),
       dbQuery<DueCustomerRow[]>(
         `SELECT
-           id,
-           name,
-           phone,
-           due
-         FROM customers
-         WHERE is_active = 1
-           AND due > 0
-         ORDER BY due DESC, updated_at DESC
-         LIMIT 10`,
+           COALESCE(s.customer_id, CONCAT('phone:', s.customer_phone)) AS customer_key,
+           COALESCE(MAX(s.customer_name), MAX(c.name), 'Walk-in') AS name,
+           MAX(s.customer_phone) AS phone,
+           COALESCE(SUM(s.due), 0) AS due
+         FROM sales s
+         LEFT JOIN customers c ON c.id = s.customer_id
+         WHERE DATE(s.created_at) BETWEEN ? AND ?
+           AND s.due > 0
+         GROUP BY customer_key, s.customer_phone
+         ORDER BY due DESC, MAX(s.created_at) DESC
+         LIMIT 200`,
+        [from, to],
+      ),
+      dbQuery<StockChangeRow[]>(
+        `SELECT
+           sh.product_id,
+           sh.product_name,
+           COUNT(*) AS entry_count,
+           COALESCE(SUM(CASE WHEN sh.change_type = 'restock' THEN sh.quantity_change ELSE 0 END), 0) AS restocked_units,
+           COALESCE(SUM(CASE WHEN sh.change_type = 'sale' THEN ABS(sh.quantity_change) ELSE 0 END), 0) AS sold_units,
+           COALESCE(SUM(CASE WHEN sh.change_type = 'adjustment' THEN sh.quantity_change ELSE 0 END), 0) AS adjustment_units,
+           COALESCE(SUM(sh.quantity_change), 0) AS net_change_units,
+           DATE_FORMAT(MAX(sh.created_at), '%d-%m-%Y %H:%i') AS last_changed_at
+         FROM stock_history sh
+         WHERE DATE(sh.created_at) BETWEEN ? AND ?
+         GROUP BY sh.product_id, sh.product_name
+         ORDER BY MAX(sh.created_at) DESC, sh.product_name ASC
+         LIMIT 2000`,
+        [from, to],
       ),
       dbQuery<SalesPeriodRow[]>(
         `SELECT
@@ -478,8 +510,8 @@ export async function GET(request: NextRequest) {
     const expenseTotal = roundMoney(toNumber(expenseRows[0]?.value));
     const grossProfit = roundMoney(toNumber(grossProfitRows[0]?.value));
     const netProfit = roundMoney(grossProfit - expenseTotal);
-    const revenueCollected = roundMoney(Math.max(salesTotal - dueTotal, 0) + dueCollected);
-    const netRevenue = roundMoney(revenueCollected - expenseTotal);
+    const salesAmountCollected = roundMoney(Math.max(salesTotal - dueTotal, 0) + dueCollected);
+    const netSalesAmount = roundMoney(salesAmountCollected - expenseTotal);
 
     const stockSnapshot = stockSnapshotRows[0] ?? {
       total_products: 0,
@@ -510,8 +542,8 @@ export async function GET(request: NextRequest) {
         expense_total: expenseTotal,
         gross_profit: grossProfit,
         net_profit: netProfit,
-        revenue_collected: revenueCollected,
-        net_revenue: netRevenue,
+        sales_amount_collected: salesAmountCollected,
+        net_sales_amount: netSalesAmount,
         total_customers: Number(totalCustomersRows[0]?.value ?? 0),
         due_customers_count: Number(dueCustomersRows[0]?.value ?? 0),
         outstanding_due: roundMoney(toNumber(outstandingDueRows[0]?.value)),
@@ -538,10 +570,21 @@ export async function GET(request: NextRequest) {
         total_amount: roundMoney(toNumber(row.total_amount)),
       })),
       top_due_customers: topDueCustomerRows.map((row) => ({
-        id: row.id,
+        id: row.customer_key,
         name: row.name,
         phone: row.phone,
         due: roundMoney(toNumber(row.due)),
+      })),
+      stock_changes: stockChangeRows.map((row) => ({
+        id: row.product_id,
+        product_id: row.product_id,
+        product_name: row.product_name,
+        entry_count: Number(row.entry_count ?? 0),
+        restocked_units: Number(row.restocked_units ?? 0),
+        sold_units: Number(row.sold_units ?? 0),
+        adjustment_units: Number(row.adjustment_units ?? 0),
+        net_change_units: Number(row.net_change_units ?? 0),
+        last_changed_at: row.last_changed_at,
       })),
       meta: {
         points: pagedTrend.length,

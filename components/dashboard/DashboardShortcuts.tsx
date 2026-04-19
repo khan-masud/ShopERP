@@ -41,7 +41,7 @@ const shortcuts: ShortcutConfig[] = [
   {
     id: "sales-history",
     label: "Sales History",
-    description: "Inspect invoices and due status",
+    description: "Inspect sell and due status",
     href: "/sales",
     key: "h",
     hotkey: "Alt+H",

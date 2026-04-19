@@ -45,6 +45,8 @@ type TemplateReportResponse = {
     gross_profit: number;
     net_profit: number;
     outstanding_due: number;
+    today_due_amount: number;
+    today_due_customers: number;
     total_customers: number;
     due_customers: number;
     stock_in_units: number;
@@ -199,6 +201,8 @@ async function buildRangeSummary(from: string, to: string) {
     dueCollectedRows,
     expenseRows,
     outstandingDueRows,
+    todayDueAmountRows,
+    todayDueCustomersRows,
     totalCustomersRows,
     dueCustomersRows,
     stockMovementRows,
@@ -239,6 +243,20 @@ async function buildRangeSummary(from: string, to: string) {
        WHERE is_active = 1`,
     ),
     dbQuery<NumberValueRow[]>(
+      `SELECT COALESCE(SUM(due), 0) AS value
+       FROM sales
+       WHERE DATE(created_at) BETWEEN ? AND ?
+         AND due > 0`,
+      [from, to],
+    ),
+    dbQuery<NumberValueRow[]>(
+      `SELECT COUNT(DISTINCT COALESCE(customer_id, customer_phone)) AS value
+       FROM sales
+       WHERE DATE(created_at) BETWEEN ? AND ?
+         AND due > 0`,
+      [from, to],
+    ),
+    dbQuery<NumberValueRow[]>(
       `SELECT COUNT(*) AS value
        FROM customers
        WHERE is_active = 1`,
@@ -276,6 +294,8 @@ async function buildRangeSummary(from: string, to: string) {
     gross_profit: grossProfit,
     net_profit: netProfit,
     outstanding_due: roundMoney(toNumber(outstandingDueRows[0]?.value)),
+    today_due_amount: roundMoney(toNumber(todayDueAmountRows[0]?.value)),
+    today_due_customers: Number(todayDueCustomersRows[0]?.value ?? 0),
     total_customers: Number(totalCustomersRows[0]?.value ?? 0),
     due_customers: Number(dueCustomersRows[0]?.value ?? 0),
     stock_in_units: roundMoney(toNumber(stockMovement?.restocked_units)),
@@ -297,7 +317,7 @@ async function buildSellingTable(
 ): Promise<{ table: ReportTable; pagination: PaginationContext; extraTables: ReportTable[] }> {
   if (groupBy === "day") {
     const totalRows = await getTotalRows(
-      `SELECT COUNT(*) AS value
+      `SELECT COUNT(DISTINCT COALESCE(customer_id, CONCAT('phone:', customer_phone))) AS value
        FROM sales
        WHERE DATE(created_at) BETWEEN ? AND ?`,
       [from, to],
@@ -307,13 +327,15 @@ async function buildSellingTable(
 
     const rows = await dbQuery<GenericRow[]>(
       `SELECT
-         DATE(s.created_at) AS report_date,
+         DATE_FORMAT(s.created_at, '%d-%m-%Y %H:%i') AS report_date,
          s.id AS sale_id,
+         COALESCE(s.customer_name, c.name, 'Walk-in') AS customer_name,
          COALESCE(s.total, 0) AS amount,
          COALESCE(s.due, 0) AS due_amount,
-         COALESCE(s.paid, 0) AS revenue,
+         COALESCE(s.paid, 0) AS sales_amount,
          COALESCE(p.gross_profit, 0) AS profit
        FROM sales s
+       LEFT JOIN customers c ON c.id = s.customer_id
        LEFT JOIN (
          SELECT
            si.sale_id,
@@ -331,13 +353,14 @@ async function buildSellingTable(
       table: {
         key: "selling-report",
         title: "Selling Report",
-        columns: ["Date", "Sale ID", "Amount", "Due Amount", "Revenue", "Profit"],
+        columns: ["Date", "Sale ID", "Customer", "Amount", "Due Amount", "Sales amount", "Profit"],
         rows: rows.map((row) => ({
           Date: String(row.report_date ?? ""),
           "Sale ID": Number(row.sale_id ?? 0),
+          Customer: String(row.customer_name ?? "Walk-in"),
           Amount: roundMoney(toNumber(row.amount)),
           "Due Amount": roundMoney(toNumber(row.due_amount)),
-          Revenue: roundMoney(toNumber(row.revenue)),
+          "Sales amount": roundMoney(toNumber(row.sales_amount)),
           Profit: roundMoney(toNumber(row.profit)),
         })),
       },
@@ -365,7 +388,7 @@ async function buildSellingTable(
        COUNT(*) AS invoices,
        COALESCE(SUM(s.total), 0) AS amount,
        COALESCE(SUM(s.due), 0) AS due_amount,
-       COALESCE(SUM(s.paid), 0) AS revenue,
+      COALESCE(SUM(s.paid), 0) AS sales_amount,
        COALESCE(SUM(p.gross_profit), 0) AS profit
      FROM sales s
      LEFT JOIN (
@@ -386,13 +409,13 @@ async function buildSellingTable(
     table: {
       key: "selling-report",
       title: "Selling Report",
-      columns: ["Month", "Invoices", "Amount", "Due Amount", "Revenue", "Profit"],
+      columns: ["Month", "Sell", "Amount", "Due Amount", "Sales amount", "Profit"],
       rows: rows.map((row) => ({
         Month: String(row.period_month ?? ""),
-        Invoices: Number(row.invoices ?? 0),
+        Sell: Number(row.invoices ?? 0),
         Amount: roundMoney(toNumber(row.amount)),
         "Due Amount": roundMoney(toNumber(row.due_amount)),
-        Revenue: roundMoney(toNumber(row.revenue)),
+        "Sales amount": roundMoney(toNumber(row.sales_amount)),
         Profit: roundMoney(toNumber(row.profit)),
       })),
     },
@@ -410,7 +433,7 @@ async function buildDueTable(
 ): Promise<{ table: ReportTable; pagination: PaginationContext; extraTables: ReportTable[] }> {
   if (groupBy === "day") {
     const totalRows = await getTotalRows(
-      `SELECT COUNT(*) AS value
+      `SELECT COUNT(DISTINCT COALESCE(customer_id, CONCAT('phone:', customer_phone))) AS value
        FROM sales
        WHERE DATE(created_at) BETWEEN ? AND ?
          AND due > 0`,
@@ -421,13 +444,14 @@ async function buildDueTable(
 
     const rows = await dbQuery<GenericRow[]>(
       `SELECT
-         DATE(s.created_at) AS report_date,
-         COALESCE(s.customer_name, c.name, 'Walk-in') AS customer_name,
-         s.id AS sale_id,
-         COALESCE(s.total, 0) AS total_amount,
-         COALESCE(s.paid, 0) AS paid_amount,
-         COALESCE(s.due, 0) AS due_amount,
-         COALESCE(dp.collected, 0) AS due_collected
+         DATE_FORMAT(MAX(s.created_at), '%d-%m-%Y %H:%i') AS report_date,
+         COALESCE(MAX(s.customer_name), MAX(c.name), 'Walk-in') AS customer_name,
+         MAX(s.customer_phone) AS customer_phone,
+         GROUP_CONCAT(CAST(s.id AS CHAR) ORDER BY s.created_at DESC, s.id DESC SEPARATOR ', ') AS sell_ids,
+         COALESCE(SUM(s.total), 0) AS total_amount,
+         COALESCE(SUM(s.paid), 0) AS paid_amount,
+         COALESCE(SUM(s.due), 0) AS due_amount,
+         COALESCE(SUM(dp.collected), 0) AS due_collected
        FROM sales s
        LEFT JOIN customers c ON c.id = s.customer_id
        LEFT JOIN (
@@ -439,7 +463,8 @@ async function buildDueTable(
        ) dp ON dp.sale_id = s.id
        WHERE DATE(s.created_at) BETWEEN ? AND ?
          AND s.due > 0
-       ORDER BY s.created_at DESC, s.id DESC
+       GROUP BY COALESCE(s.customer_id, CONCAT('phone:', s.customer_phone)), s.customer_phone
+       ORDER BY MAX(s.created_at) DESC
        LIMIT ? OFFSET ?`,
       [from, to, pagination.pageSize, pagination.offset],
     );
@@ -448,11 +473,12 @@ async function buildDueTable(
       table: {
         key: "due-report",
         title: "Due Report",
-        columns: ["Date", "Customer", "Sale ID", "Total Amount", "Paid", "Due Amount", "Due Collected"],
+        columns: ["Date", "Customer", "Phone", "Sell IDs", "Total Amount", "Paid", "Due Amount", "Due Collected"],
         rows: rows.map((row) => ({
           Date: String(row.report_date ?? ""),
           Customer: String(row.customer_name ?? "Walk-in"),
-          "Sale ID": Number(row.sale_id ?? 0),
+          Phone: String(row.customer_phone ?? ""),
+          "Sell IDs": String(row.sell_ids ?? ""),
           "Total Amount": roundMoney(toNumber(row.total_amount)),
           Paid: roundMoney(toNumber(row.paid_amount)),
           "Due Amount": roundMoney(toNumber(row.due_amount)),
@@ -467,11 +493,13 @@ async function buildDueTable(
   const totalRows = await getTotalRows(
     `SELECT COUNT(*) AS value
      FROM (
-       SELECT ${monthExpression("s.created_at")} AS period_month
+       SELECT
+         ${monthExpression("s.created_at")} AS period_month,
+         COALESCE(s.customer_id, CONCAT('phone:', s.customer_phone)) AS customer_key
        FROM sales s
        WHERE DATE(s.created_at) BETWEEN ? AND ?
          AND s.due > 0
-       GROUP BY ${monthExpression("s.created_at")}
+       GROUP BY ${monthExpression("s.created_at")}, customer_key
      ) grouped_rows`,
     [from, to],
   );
@@ -481,13 +509,16 @@ async function buildDueTable(
   const rows = await dbQuery<GenericRow[]>(
     `SELECT
        ${monthExpression("s.created_at")} AS period_month,
-       COUNT(*) AS due_sales,
-       COUNT(DISTINCT s.customer_phone) AS due_customers,
+       COALESCE(MAX(s.customer_name), MAX(c.name), 'Walk-in') AS customer_name,
+       MAX(s.customer_phone) AS customer_phone,
+       GROUP_CONCAT(CAST(s.id AS CHAR) ORDER BY s.created_at DESC, s.id DESC SEPARATOR ', ') AS sell_ids,
        COALESCE(SUM(s.total), 0) AS total_amount,
        COALESCE(SUM(s.paid), 0) AS paid_amount,
        COALESCE(SUM(s.due), 0) AS due_amount,
-       COALESCE(SUM(dp.collected), 0) AS due_collected
+       COALESCE(SUM(dp.collected), 0) AS due_collected,
+       MAX(s.created_at) AS latest_sale_at
      FROM sales s
+     LEFT JOIN customers c ON c.id = s.customer_id
      LEFT JOIN (
        SELECT
          sale_id,
@@ -497,8 +528,8 @@ async function buildDueTable(
      ) dp ON dp.sale_id = s.id
      WHERE DATE(s.created_at) BETWEEN ? AND ?
        AND s.due > 0
-     GROUP BY ${monthExpression("s.created_at")}
-     ORDER BY period_month DESC
+     GROUP BY ${monthExpression("s.created_at")}, COALESCE(s.customer_id, CONCAT('phone:', s.customer_phone)), s.customer_phone
+     ORDER BY period_month DESC, latest_sale_at DESC
      LIMIT ? OFFSET ?`,
     [from, to, pagination.pageSize, pagination.offset],
   );
@@ -507,11 +538,12 @@ async function buildDueTable(
     table: {
       key: "due-report",
       title: "Due Report",
-      columns: ["Month", "Due Sales", "Due Customers", "Total Amount", "Paid", "Due Amount", "Due Collected"],
+      columns: ["Month", "Customer", "Phone", "Sell IDs", "Total Amount", "Paid", "Due Amount", "Due Collected"],
       rows: rows.map((row) => ({
         Month: String(row.period_month ?? ""),
-        "Due Sales": Number(row.due_sales ?? 0),
-        "Due Customers": Number(row.due_customers ?? 0),
+        Customer: String(row.customer_name ?? "Walk-in"),
+        Phone: String(row.customer_phone ?? ""),
+        "Sell IDs": String(row.sell_ids ?? ""),
         "Total Amount": roundMoney(toNumber(row.total_amount)),
         Paid: roundMoney(toNumber(row.paid_amount)),
         "Due Amount": roundMoney(toNumber(row.due_amount)),
@@ -532,7 +564,7 @@ async function buildStockTable(
 ): Promise<{ table: ReportTable; pagination: PaginationContext; extraTables: ReportTable[] }> {
   if (groupBy === "day") {
     const totalRows = await getTotalRows(
-      `SELECT COUNT(*) AS value
+      `SELECT COUNT(DISTINCT product_id) AS value
        FROM stock_history
        WHERE DATE(created_at) BETWEEN ? AND ?`,
       [from, to],
@@ -542,22 +574,38 @@ async function buildStockTable(
 
     const rows = await dbQuery<GenericRow[]>(
       `SELECT
-         DATE(created_at) AS report_date,
-         product_name,
-         quantity_before AS previous_stock,
-         quantity_after AS current_stock,
-         change_type,
-         quantity_change
-       FROM stock_history
-       WHERE DATE(created_at) BETWEEN ? AND ?
-       ORDER BY created_at DESC, id DESC
+         DATE_FORMAT(MAX(sh.created_at), '%d-%m-%Y %H:%i') AS report_date,
+         MAX(sh.product_name) AS product_name,
+         CAST(
+           SUBSTRING_INDEX(
+             GROUP_CONCAT(sh.quantity_before ORDER BY sh.created_at ASC, sh.id ASC SEPARATOR ','),
+             ',',
+             1
+           ) AS SIGNED
+         ) AS previous_stock,
+         CAST(
+           SUBSTRING_INDEX(
+             GROUP_CONCAT(sh.quantity_after ORDER BY sh.created_at DESC, sh.id DESC SEPARATOR ','),
+             ',',
+             1
+           ) AS SIGNED
+         ) AS current_stock,
+         CASE
+           WHEN COUNT(DISTINCT sh.change_type) = 1 THEN MAX(sh.change_type)
+           ELSE 'mixed'
+         END AS change_type,
+         COALESCE(SUM(sh.quantity_change), 0) AS quantity_change
+       FROM stock_history sh
+       WHERE DATE(sh.created_at) BETWEEN ? AND ?
+       GROUP BY sh.product_id
+       ORDER BY MAX(sh.created_at) DESC, product_name ASC
        LIMIT ? OFFSET ?`,
       [from, to, pagination.pageSize, pagination.offset],
     );
 
     const restockAdjustmentRows = await dbQuery<GenericRow[]>(
       `SELECT
-         DATE(created_at) AS report_date,
+         DATE_FORMAT(created_at, '%d-%m-%Y %H:%i') AS report_date,
          product_name,
          change_type,
          quantity_change,
@@ -738,7 +786,7 @@ async function buildExpenseTable(
 
     const rows = await dbQuery<GenericRow[]>(
       `SELECT
-         expense_date AS report_date,
+         DATE_FORMAT(expense_date, '%d-%m-%Y') AS report_date,
          title AS expense,
          category,
          amount,
@@ -836,17 +884,19 @@ async function buildCustomerTable(
 
     const rows = await dbQuery<GenericRow[]>(
       `SELECT
-         DATE(s.created_at) AS report_date,
-         COALESCE(s.customer_name, c.name, 'Walk-in') AS customer_name,
-         s.customer_phone,
-         s.id AS sale_id,
-         COALESCE(s.paid, 0) AS paid_amount,
-         COALESCE(s.due, 0) AS due_amount,
-         COALESCE(s.total, 0) AS total_amount
+         DATE_FORMAT(MAX(s.created_at), '%d-%m-%Y %H:%i') AS report_date,
+         COALESCE(MAX(s.customer_name), MAX(c.name), 'Walk-in') AS customer_name,
+         MAX(s.customer_phone) AS customer_phone,
+         GROUP_CONCAT(CAST(s.id AS CHAR) ORDER BY s.created_at DESC, s.id DESC SEPARATOR ', ') AS sell_ids,
+         COUNT(*) AS sell_count,
+         COALESCE(SUM(s.paid), 0) AS paid_amount,
+         COALESCE(SUM(s.due), 0) AS due_amount,
+         COALESCE(SUM(s.total), 0) AS total_amount
        FROM sales s
        LEFT JOIN customers c ON c.id = s.customer_id
        WHERE DATE(s.created_at) BETWEEN ? AND ?
-       ORDER BY s.created_at DESC, s.id DESC
+       GROUP BY COALESCE(s.customer_id, CONCAT('phone:', s.customer_phone)), s.customer_phone
+       ORDER BY MAX(s.created_at) DESC
        LIMIT ? OFFSET ?`,
       [from, to, pagination.pageSize, pagination.offset],
     );
@@ -855,13 +905,14 @@ async function buildCustomerTable(
       table: {
         key: "customer-report",
         title: "Customer Report",
-        columns: ["Date", "Customer", "Phone", "Sale ID", "Paying", "Due Amount", "Total Amount"],
+        columns: ["Date", "Customer", "Phone", "Sell IDs", "Sell", "Paid", "Due Amount", "Total Amount"],
         rows: rows.map((row) => ({
           Date: String(row.report_date ?? ""),
           Customer: String(row.customer_name ?? "Walk-in"),
           Phone: String(row.customer_phone ?? ""),
-          "Sale ID": Number(row.sale_id ?? 0),
-          Paying: roundMoney(toNumber(row.paid_amount)),
+          "Sell IDs": String(row.sell_ids ?? ""),
+          Sell: Number(row.sell_count ?? 0),
+          Paid: roundMoney(toNumber(row.paid_amount)),
           "Due Amount": roundMoney(toNumber(row.due_amount)),
           "Total Amount": roundMoney(toNumber(row.total_amount)),
         })),
@@ -872,15 +923,9 @@ async function buildCustomerTable(
   }
 
   const totalRows = await getTotalRows(
-    `SELECT COUNT(*) AS value
-     FROM (
-       SELECT
-         ${monthExpression("s.created_at")} AS period_month,
-         s.customer_phone
-       FROM sales s
-       WHERE DATE(s.created_at) BETWEEN ? AND ?
-       GROUP BY ${monthExpression("s.created_at")}, s.customer_phone
-     ) grouped_rows`,
+    `SELECT COUNT(DISTINCT COALESCE(customer_id, CONCAT('phone:', customer_phone))) AS value
+     FROM sales
+     WHERE DATE(created_at) BETWEEN ? AND ?`,
     [from, to],
   );
 
@@ -888,18 +933,19 @@ async function buildCustomerTable(
 
   const rows = await dbQuery<GenericRow[]>(
     `SELECT
-       ${monthExpression("s.created_at")} AS period_month,
+       DATE_FORMAT(MAX(s.created_at), '%d-%m-%Y %H:%i') AS report_date,
        COALESCE(MAX(s.customer_name), MAX(c.name), 'Walk-in') AS customer_name,
-       s.customer_phone,
-       COUNT(*) AS invoices,
+       MAX(s.customer_phone) AS customer_phone,
+       GROUP_CONCAT(CAST(s.id AS CHAR) ORDER BY s.created_at DESC, s.id DESC SEPARATOR ', ') AS sell_ids,
+       COUNT(*) AS sell_count,
        COALESCE(SUM(s.paid), 0) AS paid_amount,
        COALESCE(SUM(s.due), 0) AS due_amount,
        COALESCE(SUM(s.total), 0) AS total_amount
      FROM sales s
      LEFT JOIN customers c ON c.id = s.customer_id
      WHERE DATE(s.created_at) BETWEEN ? AND ?
-     GROUP BY ${monthExpression("s.created_at")}, s.customer_phone
-     ORDER BY period_month DESC, customer_name ASC
+     GROUP BY COALESCE(s.customer_id, CONCAT('phone:', s.customer_phone)), s.customer_phone
+     ORDER BY MAX(s.created_at) DESC
      LIMIT ? OFFSET ?`,
     [from, to, pagination.pageSize, pagination.offset],
   );
@@ -908,13 +954,14 @@ async function buildCustomerTable(
     table: {
       key: "customer-report",
       title: "Customer Report",
-      columns: ["Month", "Customer", "Phone", "Invoices", "Paying", "Due Amount", "Total Amount"],
+      columns: ["Date", "Customer", "Phone", "Sell IDs", "Sell", "Paid", "Due Amount", "Total Amount"],
       rows: rows.map((row) => ({
-        Month: String(row.period_month ?? ""),
+        Date: String(row.report_date ?? ""),
         Customer: String(row.customer_name ?? "Walk-in"),
         Phone: String(row.customer_phone ?? ""),
-        Invoices: Number(row.invoices ?? 0),
-        Paying: roundMoney(toNumber(row.paid_amount)),
+        "Sell IDs": String(row.sell_ids ?? ""),
+        Sell: Number(row.sell_count ?? 0),
+        Paid: roundMoney(toNumber(row.paid_amount)),
         "Due Amount": roundMoney(toNumber(row.due_amount)),
         "Total Amount": roundMoney(toNumber(row.total_amount)),
       })),
@@ -943,10 +990,10 @@ async function buildProfitTable(
 
     const rows = await dbQuery<GenericRow[]>(
       `SELECT
-         DATE(s.created_at) AS report_date,
+         DATE_FORMAT(s.created_at, '%d-%m-%Y %H:%i') AS report_date,
          s.id AS sale_id,
          COALESCE(s.total, 0) AS sales_amount,
-         COALESCE(s.paid, 0) AS revenue,
+         COALESCE(s.paid, 0) AS sales_amount,
          COALESCE(s.due, 0) AS due_amount,
          COALESCE(p.gross_profit, 0) AS gross_profit,
          CASE
@@ -969,7 +1016,7 @@ async function buildProfitTable(
 
     const dailyRows = await dbQuery<GenericRow[]>(
       `SELECT
-         DATE(s.created_at) AS report_date,
+         DATE_FORMAT(s.created_at, '%d-%m-%Y') AS report_date,
          COALESCE(SUM(s.total), 0) AS sales_amount,
          COALESCE(SUM(p.gross_profit), 0) AS gross_profit,
          COALESCE(e.expense_total, 0) AS expenses,
@@ -1006,12 +1053,12 @@ async function buildProfitTable(
       table: {
         key: "profit-report",
         title: "Profit Report",
-        columns: ["Date", "Sale ID", "Sales", "Revenue", "Due", "Profit", "Margin %"],
+        columns: ["Date", "Sale ID", "Sales", "Sales amount", "Due", "Profit", "Margin %"],
         rows: rows.map((row) => ({
           Date: String(row.report_date ?? ""),
           "Sale ID": Number(row.sale_id ?? 0),
           Sales: roundMoney(toNumber(row.sales_amount)),
-          Revenue: roundMoney(toNumber(row.revenue)),
+          "Sales amount": roundMoney(toNumber(row.sales_amount)),
           Due: roundMoney(toNumber(row.due_amount)),
           Profit: roundMoney(toNumber(row.gross_profit)),
           "Margin %": roundMoney(toNumber(row.margin_percent)),
@@ -1054,7 +1101,7 @@ async function buildProfitTable(
        ${monthExpression("s.created_at")} AS period_month,
        COUNT(*) AS invoices,
        COALESCE(SUM(s.total), 0) AS sales_amount,
-       COALESCE(SUM(s.paid), 0) AS revenue,
+      COALESCE(SUM(s.paid), 0) AS sales_amount,
        COALESCE(SUM(s.due), 0) AS due_amount,
        COALESCE(SUM(p.gross_profit), 0) AS gross_profit,
        COALESCE(em.expense_total, 0) AS expenses,
@@ -1091,12 +1138,12 @@ async function buildProfitTable(
     table: {
       key: "profit-report",
       title: "Profit Report",
-      columns: ["Month", "Invoices", "Sales", "Revenue", "Due", "Gross Profit", "Expenses", "Net Profit", "Margin %"],
+      columns: ["Month", "Sell", "Sales", "Sales amount", "Due", "Gross Profit", "Expenses", "Net Profit", "Margin %"],
       rows: rows.map((row) => ({
         Month: String(row.period_month ?? ""),
-        Invoices: Number(row.invoices ?? 0),
+        Sell: Number(row.invoices ?? 0),
         Sales: roundMoney(toNumber(row.sales_amount)),
-        Revenue: roundMoney(toNumber(row.revenue)),
+        "Sales amount": roundMoney(toNumber(row.sales_amount)),
         Due: roundMoney(toNumber(row.due_amount)),
         "Gross Profit": roundMoney(toNumber(row.gross_profit)),
         Expenses: roundMoney(toNumber(row.expenses)),

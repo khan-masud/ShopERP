@@ -522,7 +522,7 @@ export default function AnalyticsPage() {
               hint="After expenses"
             />
             <StatCard
-              title="Outstanding Due"
+              title="Total Due"
               value={formatTaka(overviewData.outstanding_due)}
               accent="orange"
               hint="Current unpaid balance"
@@ -557,7 +557,7 @@ export default function AnalyticsPage() {
             <Card className="p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Monthly Net Margin</p>
               <p className="mt-2 text-2xl font-semibold text-slate-900 tabular-nums">{formatPercent(monthlyNetMargin)}</p>
-              <p className="mt-1 text-xs text-slate-500">Net profit over revenue</p>
+              <p className="mt-1 text-xs text-slate-500">Net profit over sales amount</p>
             </Card>
           </div>
 
