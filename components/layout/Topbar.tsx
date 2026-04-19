@@ -6,8 +6,12 @@ import toast from "react-hot-toast";
 import { Bell, LogOut, UserCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import type { AppUser } from "@/types/auth";
+import type { SiteBranding } from "@/lib/server/site-settings";
 
-export function Topbar({ user }: { user: AppUser }) {
+const lowStockDismissKey = "shoperp.warning.dismiss.low";
+const outOfStockDismissKey = "shoperp.warning.dismiss.out";
+
+export function Topbar({ user, branding }: { user: AppUser; branding: SiteBranding }) {
   const router = useRouter();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
@@ -20,6 +24,13 @@ export function Topbar({ user }: { user: AppUser }) {
 
       if (!res.ok) {
         throw new Error("Logout failed");
+      }
+
+      try {
+        window.sessionStorage.removeItem(lowStockDismissKey);
+        window.sessionStorage.removeItem(outOfStockDismissKey);
+      } catch {
+        // Ignore storage cleanup failures.
       }
 
       toast.success("Successfully logged out");
@@ -36,8 +47,7 @@ export function Topbar({ user }: { user: AppUser }) {
     <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
       <div className="flex h-16 items-center justify-between gap-3 px-4 lg:px-6">
         <div>
-          <h1 className="text-sm font-semibold text-slate-900">ShopERP Operations Center</h1>
-          <p className="text-xs text-slate-500">Real-time retail operations</p>
+          <h1 className="text-sm font-semibold text-slate-900">{branding.short_name}</h1>
         </div>
 
         <div className="flex items-center gap-2">

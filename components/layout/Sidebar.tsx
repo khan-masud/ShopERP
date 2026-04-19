@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   LineChart,
   ReceiptText,
+  Settings,
   Settings2,
   Shield,
   ShoppingCart,
@@ -20,6 +21,7 @@ import {
 } from "lucide-react";
 import { clsx } from "clsx";
 import type { AppUser } from "@/types/auth";
+import type { SiteBranding } from "@/lib/server/site-settings";
 
 type PermissionFlags = {
   can_view: boolean;
@@ -72,9 +74,11 @@ const bottomNav: MenuItem[] = [
 export function Sidebar({
   user,
   permissionMap,
+  branding,
 }: {
   user: AppUser;
   permissionMap: PermissionMap;
+  branding: SiteBranding;
 }) {
   const pathname = usePathname();
 
@@ -89,6 +93,7 @@ export function Sidebar({
     { href: "/analytics", label: "Analytics", icon: LineChart, moduleKey: "analytics", requiredAction: "view" },
     { href: "/expenses", label: "Expenses", icon: HandCoins, moduleKey: "expenses", requiredAction: "view" },
     { href: "/audit", label: "Audit Logs", icon: Shield, moduleKey: "audit", requiredAction: "view" },
+    { href: "/settings", label: "Shop Settings", icon: Settings, moduleKey: "shop_settings", requiredAction: "view" },
   ];
 
   const adminManagementItems = [
@@ -114,8 +119,8 @@ export function Sidebar({
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-55 border-r border-slate-800 bg-slate-950 text-slate-100 lg:block">
         <div className="flex h-16 items-center border-b border-slate-800 px-5">
           <div>
-            <p className="text-lg font-semibold tracking-tight">ShopERP</p>
-            <p className="text-xs text-slate-400">Super Shop Control Panel</p>
+            <p className="text-lg font-semibold tracking-tight">{branding.short_name}</p>
+            <p className="text-xs text-slate-400">{branding.tagline}</p>
           </div>
         </div>
 

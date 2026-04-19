@@ -7,7 +7,7 @@ import toast from "react-hot-toast";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
-import { formatDateTime, formatTaka } from "@/lib/utils";
+import { formatDateTime, formatTaka, getRuntimeSiteSettings } from "@/lib/utils";
 
 type Product = {
   id: string;
@@ -92,6 +92,7 @@ function escapeHtml(value: string) {
 }
 
 function buildSlipHtml(summary: CheckoutModalSummary) {
+  const siteSettings = getRuntimeSiteSettings();
   const itemRows = summary.items
     .map(
       (item, index) => `
@@ -109,7 +110,7 @@ function buildSlipHtml(summary: CheckoutModalSummary) {
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Sell #${summary.sale_id}</title>
+    <title>${escapeHtml(siteSettings.site_name)} Sale #${summary.sale_id}</title>
     <style>
       body { font-family: Arial, sans-serif; padding: 16px; color: #0f172a; }
       h1 { margin: 0 0 4px; font-size: 18px; }
@@ -124,7 +125,9 @@ function buildSlipHtml(summary: CheckoutModalSummary) {
     </style>
   </head>
   <body>
-    <h1>ShopERP Sell</h1>
+    <h1>${escapeHtml(siteSettings.site_name)}</h1>
+    ${siteSettings.phone_number ? `<p><strong>Shop Phone:</strong> ${escapeHtml(siteSettings.phone_number)}</p>` : ""}
+    ${siteSettings.address ? `<p><strong>Shop Address:</strong> ${escapeHtml(siteSettings.address)}</p>` : ""}
     <p><strong>Sale:</strong> #${summary.sale_id}</p>
     <p><strong>Date:</strong> ${escapeHtml(formatDateTime(summary.completed_at))}</p>
     <p><strong>Phone:</strong> ${escapeHtml(summary.customer_phone)}</p>

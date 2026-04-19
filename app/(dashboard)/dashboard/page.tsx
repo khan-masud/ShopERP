@@ -1,5 +1,6 @@
 import type { RowDataPacket } from "mysql2/promise";
 import { DashboardShortcuts } from "@/components/dashboard/DashboardShortcuts";
+import { StockWarnings } from "@/components/dashboard/StockWarnings";
 import { Card } from "@/components/ui/Card";
 import { StatCard } from "@/components/ui/StatCard";
 import { dbQuery } from "@/lib/server/db";
@@ -86,6 +87,8 @@ type DashboardData = {
   newCustomers30dCount: number;
   recentSales: RecentSaleRow[];
   lowStockProducts: LowStockRow[];
+  lowStockAlertProducts: LowStockRow[];
+  outOfStockAlertProducts: LowStockRow[];
   productVelocity: ProductVelocityView[];
   customerPulse: CustomerPulseRow[];
   refundSummary: {
@@ -159,6 +162,8 @@ function buildEmptyData(): DashboardData {
     newCustomers30dCount: 0,
     recentSales: [],
     lowStockProducts: [],
+    lowStockAlertProducts: [],
+    outOfStockAlertProducts: [],
     productVelocity: [],
     customerPulse: [],
     refundSummary: {
@@ -183,6 +188,8 @@ async function getDashboardData(): Promise<DashboardData> {
       newCustomersRows,
       recentSales,
       lowStockProducts,
+      lowStockAlertProducts,
+      outOfStockAlertProducts,
       productVelocityRows,
       customerPulse,
     ] = await Promise.all([
@@ -252,6 +259,23 @@ async function getDashboardData(): Promise<DashboardData> {
            AND stock <= min_stock
          ORDER BY stock ASC, min_stock DESC, name ASC
          LIMIT 12`,
+      ),
+      dbQuery<LowStockRow[]>(
+        `SELECT id, name, sku, stock, min_stock
+         FROM products
+         WHERE is_active = 1
+           AND stock > 0
+           AND stock <= min_stock
+         ORDER BY stock ASC, min_stock DESC, name ASC
+         LIMIT 50`,
+      ),
+      dbQuery<LowStockRow[]>(
+        `SELECT id, name, sku, stock, min_stock
+         FROM products
+         WHERE is_active = 1
+           AND stock <= 0
+         ORDER BY name ASC
+         LIMIT 50`,
       ),
       dbQuery<ProductVelocityRow[]>(
         `SELECT
@@ -382,6 +406,8 @@ async function getDashboardData(): Promise<DashboardData> {
       newCustomers30dCount: Number(newCustomersRows[0]?.value ?? 0),
       recentSales,
       lowStockProducts,
+      lowStockAlertProducts,
+      outOfStockAlertProducts,
       productVelocity,
       customerPulse,
       refundSummary,
@@ -404,6 +430,13 @@ export default async function DashboardPage() {
         <Card className="border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
           Database is not configured yet. Apply the schema and run the admin seed first.
         </Card>
+      ) : null}
+
+      {data.dbReady ? (
+        <StockWarnings
+          lowStockProducts={data.lowStockAlertProducts}
+          outOfStockProducts={data.outOfStockAlertProducts}
+        />
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">

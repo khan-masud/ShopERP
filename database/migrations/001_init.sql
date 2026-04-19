@@ -74,6 +74,30 @@ CREATE TABLE IF NOT EXISTS role_permissions (
   UNIQUE KEY uniq_role_module (role, module_key)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS site_settings (
+  id TINYINT UNSIGNED PRIMARY KEY,
+  site_name VARCHAR(191) NOT NULL,
+  short_name VARCHAR(100) NOT NULL,
+  tagline VARCHAR(255) NULL,
+  primary_color VARCHAR(20) NOT NULL DEFAULT '#0f172a',
+  accent_color VARCHAR(20) NOT NULL DEFAULT '#2563eb',
+  currency_symbol VARCHAR(10) NOT NULL DEFAULT '৳',
+  timezone VARCHAR(60) NOT NULL DEFAULT 'Asia/Dhaka',
+  date_format ENUM('DD-MM-YYYY', 'MM-DD-YYYY', 'YYYY-MM-DD') NOT NULL DEFAULT 'DD-MM-YYYY',
+  logo_url VARCHAR(500) NULL,
+  favicon_url VARCHAR(500) NULL,
+  support_phone VARCHAR(40) NULL,
+  support_email VARCHAR(191) NULL,
+  address VARCHAR(255) NULL,
+  receipt_footer VARCHAR(500) NULL,
+  low_stock_threshold INT NOT NULL DEFAULT 10,
+  vat_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
+  is_pos_rounding_enabled TINYINT(1) NOT NULL DEFAULT 0,
+  maintenance_mode TINYINT(1) NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS products (
   id CHAR(36) PRIMARY KEY,
   name VARCHAR(191) NOT NULL,
@@ -379,3 +403,49 @@ ON DUPLICATE KEY UPDATE
   can_add = VALUES(can_add),
   can_edit = VALUES(can_edit),
   can_delete = VALUES(can_delete);
+
+INSERT IGNORE INTO site_settings (
+  id,
+  site_name,
+  short_name,
+  tagline,
+  primary_color,
+  accent_color,
+  currency_symbol,
+  timezone,
+  date_format,
+  logo_url,
+  favicon_url,
+  support_phone,
+  support_email,
+  address,
+  receipt_footer,
+  low_stock_threshold,
+  vat_percent,
+  is_pos_rounding_enabled,
+  maintenance_mode,
+  created_at,
+  updated_at
+) VALUES (
+  1,
+  'ShopERP',
+  'ShopERP',
+  'Smart retail operations in one place',
+  '#0f172a',
+  '#2563eb',
+  '৳',
+  'Asia/Dhaka',
+  'DD-MM-YYYY',
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  'Thank you for shopping with us',
+  10,
+  0,
+  0,
+  0,
+  NOW(),
+  NOW()
+);

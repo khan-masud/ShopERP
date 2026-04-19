@@ -8,7 +8,7 @@ import * as XLSX from "xlsx";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { StatCard } from "@/components/ui/StatCard";
-import { formatDate, formatDateTime, formatTaka } from "@/lib/utils";
+import { formatDate, formatDateTime, formatTaka, getRuntimeSiteSettings } from "@/lib/utils";
 
 type GroupBy = "day" | "month";
 type SpecialReportCardKey =
@@ -190,6 +190,19 @@ function getSummaryItems(report: SummaryResponse) {
   ];
 }
 
+function getShopDocumentLines() {
+  const settings = getRuntimeSiteSettings();
+  const contactLine = [
+    settings.phone_number ? `Phone: ${settings.phone_number}` : null,
+    settings.address ? `Address: ${settings.address}` : null,
+  ].filter(Boolean).join(" | ");
+
+  return {
+    settings,
+    contactLine,
+  };
+}
+
 async function fetchRangeSummary(from: string, to: string, groupBy: GroupBy) {
   const params = new URLSearchParams({ from, to, groupBy });
 
@@ -214,6 +227,7 @@ function buildPrintableHtml(
   groupBy: GroupBy,
   generatedAt: string,
 ) {
+  const { settings, contactLine } = getShopDocumentLines();
   const summaryRows = getSummaryItems(report)
     .map((item) => `<tr><td>${item.label}</td><td>${item.value}</td></tr>`)
     .join("");
@@ -271,7 +285,7 @@ function buildPrintableHtml(
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>ShopERP ${title}</title>
+    <title>${settings.site_name} ${title}</title>
     <style>
       body { font-family: Arial, sans-serif; color: #0f172a; margin: 20px; }
       h1 { margin: 0 0 8px; font-size: 22px; }
@@ -283,7 +297,9 @@ function buildPrintableHtml(
     </style>
   </head>
   <body>
-    <h1>${title}</h1>
+    <h1>${settings.site_name}</h1>
+    ${contactLine ? `<p class="meta">${contactLine}</p>` : ""}
+    <h2>${title}</h2>
     <p class="meta">Range: ${formatDate(from)} to ${formatDate(to)} | Group By: ${groupBy} | Generated: ${formatDateTime(generatedAt)}</p>
 
     <h2>Summary</h2>
@@ -377,6 +393,7 @@ export default function SpecialPreviewPage() {
     }
 
     try {
+      const { settings, contactLine } = getShopDocumentLines();
       const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
         import("jspdf"),
         import("jspdf-autotable"),
@@ -385,13 +402,19 @@ export default function SpecialPreviewPage() {
       const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
       doc.setFont("helvetica", "normal");
       doc.setFontSize(14);
-      doc.text(`ShopERP ${label}`.replace(/৳/g, "Tk "), 40, 34);
+      doc.text(`${settings.site_name} - ${label}`.replace(/৳/g, "Tk "), 40, 34);
       doc.setFontSize(10);
-      doc.text(`Range: ${formatDate(from)} to ${formatDate(to)} (${groupBy})`, 40, 52);
-      doc.text(`Generated: ${formatDateTime(generatedAt)}`.replace(/৳/g, "Tk "), 40, 68);
+      let headerY = 50;
+      if (contactLine) {
+        doc.text(contactLine.replace(/৳/g, "Tk "), 40, headerY);
+        headerY += 14;
+      }
+      doc.text(`Range: ${formatDate(from)} to ${formatDate(to)} (${groupBy})`, 40, headerY);
+      headerY += 16;
+      doc.text(`Generated: ${formatDateTime(generatedAt)}`.replace(/৳/g, "Tk "), 40, headerY);
 
       autoTable(doc, {
-        startY: 84,
+        startY: headerY + 16,
         head: [["Metric", "Value"]],
         body: getSummaryItems(data).map((item) => [item.label, item.value.replace(/৳/g, "Tk ")]),
         styles: { font: "helvetica", fontSize: 8.2, cellPadding: 4 },
@@ -452,9 +475,16 @@ export default function SpecialPreviewPage() {
     }
 
     try {
+      const { settings } = getShopDocumentLines();
       const workbook = XLSX.utils.book_new();
       const summarySheet = XLSX.utils.json_to_sheet(
-        getSummaryItems(data).map((item) => ({ metric: item.label, value: item.value })),
+        [
+          { metric: "Shop Name", value: settings.site_name },
+          { metric: "Short Name", value: settings.short_name },
+          { metric: "Phone Number", value: settings.phone_number ?? "-" },
+          { metric: "Address", value: settings.address ?? "-" },
+          ...getSummaryItems(data).map((item) => ({ metric: item.label, value: item.value })),
+        ],
       );
       const trendSheet = XLSX.utils.json_to_sheet(
         data.trend.map((row) => ({

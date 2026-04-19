@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import * as XLSX from "xlsx";
@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { StatCard } from "@/components/ui/StatCard";
-import { formatDate, formatDateTime, formatTaka } from "@/lib/utils";
+import { formatDate, formatDateTime, formatTaka, getRuntimeSiteSettings } from "@/lib/utils";
 
 type GroupBy = "day" | "month";
 type ReportTemplateKey = "selling" | "due" | "stock" | "expense" | "customer" | "profit";
@@ -16,6 +16,13 @@ type RangePreset = "today" | "yesterday" | "last_week" | "last_month" | "last_ye
 
 type ReportValue = string | number | null;
 type ReportRow = Record<string, ReportValue>;
+type StatAccent = "blue" | "green" | "orange" | "red";
+
+type SummaryItem = {
+  label: string;
+  value: string;
+  accent: StatAccent;
+};
 
 type ReportTable = {
   key: string;
@@ -468,7 +475,23 @@ function escapeHtml(value: string) {
     .replace(/'/g, "&#39;");
 }
 
-function getSummaryItemsForTemplate(template: ReportTemplateKey, summary: TemplateReportResponse["summary"]) {
+function getShopDocumentLines() {
+  const settings = getRuntimeSiteSettings();
+  const contactLine = [
+    settings.phone_number ? `Phone: ${settings.phone_number}` : null,
+    settings.address ? `Address: ${settings.address}` : null,
+  ].filter(Boolean).join(" | ");
+
+  return {
+    settings,
+    contactLine,
+  };
+}
+
+function getSummaryItemsForTemplate(
+  template: ReportTemplateKey,
+  summary: TemplateReportResponse["summary"],
+): SummaryItem[] {
   switch (template) {
     case "selling":
       return [
@@ -506,7 +529,7 @@ function getSummaryItemsForTemplate(template: ReportTemplateKey, summary: Templa
         { label: "Sales Total", value: formatTaka(summary.sales_total), accent: "blue" as const },
         { label: "Total Expenses", value: formatTaka(summary.expenses_total), accent: "red" as const },
         { label: "Gross Profit", value: formatTaka(summary.gross_profit), accent: "green" as const },
-        { label: "Net Profit", value: formatTaka(summary.net_profit), accent: (summary.net_profit >= 0 ? "green" : "red") as const },
+        { label: "Net Profit", value: formatTaka(summary.net_profit), accent: summary.net_profit >= 0 ? "green" : "red" },
       ];
     default:
       return [];
@@ -561,6 +584,7 @@ function buildPrintableHtml(
   filters: ReportFilters,
   generatedAt: string,
 ) {
+  const { settings, contactLine } = getShopDocumentLines();
   const mainHeaderCells = report.table.columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("");
   const mainRows = report.table.rows
     .map((row) => {
@@ -601,7 +625,7 @@ function buildPrintableHtml(
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>ShopERP ${templateLabels[filters.template]}</title>
+    <title>${escapeHtml(settings.site_name)} ${templateLabels[filters.template]}</title>
     <style>
       body { font-family: Arial, sans-serif; color: #0f172a; margin: 22px; }
       h1 { margin: 0 0 6px; font-size: 21px; }
@@ -614,7 +638,9 @@ function buildPrintableHtml(
     </style>
   </head>
   <body>
-    <h1>ShopERP ${escapeHtml(templateLabels[filters.template])}</h1>
+    <h1>${escapeHtml(settings.site_name)}</h1>
+    ${contactLine ? `<p class="meta">${escapeHtml(contactLine)}</p>` : ""}
+    <h2>${escapeHtml(templateLabels[filters.template])}</h2>
     <p class="meta">Range: ${escapeHtml(formatDate(filters.from))} to ${escapeHtml(formatDate(filters.to))} | Group By: ${escapeHtml(filters.groupBy)} | Generated: ${escapeHtml(formatDateTime(generatedAt))}</p>
 
     <h2>Main Summary</h2>
@@ -638,6 +664,7 @@ async function exportPdf(
   filters: ReportFilters,
   generatedAt: string,
 ) {
+  const { settings, contactLine } = getShopDocumentLines();
   const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
     import("jspdf"),
     import("jspdf-autotable"),
@@ -647,10 +674,16 @@ async function exportPdf(
   doc.setFont("helvetica", "normal");
 
   doc.setFontSize(14);
-  doc.text(`ShopERP ${templateLabels[filters.template]}`.replace(/৳/g, "Tk "), 40, 34);
+  doc.text(`${settings.site_name} - ${templateLabels[filters.template]}`.replace(/৳/g, "Tk "), 40, 34);
   doc.setFontSize(10);
-  doc.text(`Range: ${formatDate(filters.from)} to ${formatDate(filters.to)} (${filters.groupBy})`, 40, 52);
-  doc.text(`Generated: ${formatDateTime(generatedAt)}`.replace(/৳/g, "Tk "), 40, 68);
+  let headerY = 50;
+  if (contactLine) {
+    doc.text(contactLine.replace(/৳/g, "Tk "), 40, headerY);
+    headerY += 14;
+  }
+  doc.text(`Range: ${formatDate(filters.from)} to ${formatDate(filters.to)} (${filters.groupBy})`, 40, headerY);
+  headerY += 16;
+  doc.text(`Generated: ${formatDateTime(generatedAt)}`.replace(/৳/g, "Tk "), 40, headerY);
 
   const summaryBody = getSummaryItemsForTemplate(filters.template, report.summary).map((item) => [
     item.label,
@@ -658,7 +691,7 @@ async function exportPdf(
   ]);
 
   autoTable(doc, {
-    startY: 84,
+    startY: headerY + 16,
     head: [["Metric", "Value"]],
     body: summaryBody,
     styles: { font: "helvetica", fontSize: 8.4, overflow: "linebreak", cellPadding: 4 },
@@ -702,6 +735,7 @@ function exportExcel(
   report: TemplateReportResponse,
   filters: ReportFilters,
 ) {
+  const { settings } = getShopDocumentLines();
   const workbook = XLSX.utils.book_new();
 
   const dynamicSummary = getSummaryItemsForTemplate(filters.template, report.summary).map(
@@ -709,6 +743,10 @@ function exportExcel(
   );
 
   const summarySheet = XLSX.utils.json_to_sheet([
+    { metric: "Shop Name", value: settings.site_name },
+    { metric: "Short Name", value: settings.short_name },
+    { metric: "Phone Number", value: settings.phone_number ?? "-" },
+    { metric: "Address", value: settings.address ?? "-" },
     { metric: "Template", value: templateLabels[filters.template] },
     { metric: "From", value: formatDate(filters.from) },
     { metric: "To", value: formatDate(filters.to) },
@@ -787,6 +825,7 @@ function buildSpecialPrintableHtml(
   selection: SpecialReportSelection,
   generatedAt: string,
 ) {
+  const { settings, contactLine } = getShopDocumentLines();
   const summaryRows = getSpecialSummaryItems(report)
     .map((item) => `<tr><td>${escapeHtml(item.label)}</td><td>${escapeHtml(item.value)}</td></tr>`)
     .join("");
@@ -830,7 +869,7 @@ function buildSpecialPrintableHtml(
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>ShopERP ${escapeHtml(selection.label)}</title>
+    <title>${escapeHtml(settings.site_name)} ${escapeHtml(selection.label)}</title>
     <style>
       body { font-family: Arial, sans-serif; color: #0f172a; margin: 22px; }
       h1 { margin: 0 0 6px; font-size: 21px; }
@@ -842,7 +881,9 @@ function buildSpecialPrintableHtml(
     </style>
   </head>
   <body>
-    <h1>${escapeHtml(selection.label)}</h1>
+    <h1>${escapeHtml(settings.site_name)}</h1>
+    ${contactLine ? `<p class="meta">${escapeHtml(contactLine)}</p>` : ""}
+    <h2>${escapeHtml(selection.label)}</h2>
     <p class="meta">Range: ${escapeHtml(formatDate(selection.from))} to ${escapeHtml(formatDate(selection.to))} | Group By: ${escapeHtml(selection.groupBy)} | Generated: ${escapeHtml(formatDateTime(generatedAt))}</p>
 
     <h2>Summary</h2>
@@ -876,6 +917,7 @@ async function exportSpecialPdf(
   selection: SpecialReportSelection,
   generatedAt: string,
 ) {
+  const { settings, contactLine } = getShopDocumentLines();
   const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
     import("jspdf"),
     import("jspdf-autotable"),
@@ -885,13 +927,19 @@ async function exportSpecialPdf(
   doc.setFont("helvetica", "normal");
 
   doc.setFontSize(14);
-  doc.text(`ShopERP ${selection.label}`.replace(/৳/g, "Tk "), 40, 34);
+  doc.text(`${settings.site_name} - ${selection.label}`.replace(/৳/g, "Tk "), 40, 34);
   doc.setFontSize(10);
-  doc.text(`Range: ${formatDate(selection.from)} to ${formatDate(selection.to)} (${selection.groupBy})`, 40, 52);
-  doc.text(`Generated: ${formatDateTime(generatedAt)}`.replace(/৳/g, "Tk "), 40, 68);
+  let headerY = 50;
+  if (contactLine) {
+    doc.text(contactLine.replace(/৳/g, "Tk "), 40, headerY);
+    headerY += 14;
+  }
+  doc.text(`Range: ${formatDate(selection.from)} to ${formatDate(selection.to)} (${selection.groupBy})`, 40, headerY);
+  headerY += 16;
+  doc.text(`Generated: ${formatDateTime(generatedAt)}`.replace(/৳/g, "Tk "), 40, headerY);
 
   autoTable(doc, {
-    startY: 84,
+    startY: headerY + 16,
     head: [["Metric", "Value"]],
     body: getSpecialSummaryItems(report).map((item) => [item.label, item.value.replace(/৳/g, "Tk ")]),
     styles: { font: "helvetica", fontSize: 8.4, overflow: "linebreak", cellPadding: 4 },
@@ -940,10 +988,17 @@ async function exportSpecialPdf(
 }
 
 function exportSpecialExcel(report: SummaryResponse, selection: SpecialReportSelection) {
+  const { settings } = getShopDocumentLines();
   const workbook = XLSX.utils.book_new();
 
   const summarySheet = XLSX.utils.json_to_sheet(
-    getSpecialSummaryItems(report).map((item) => ({ metric: item.label, value: item.value })),
+    [
+      { metric: "Shop Name", value: settings.site_name },
+      { metric: "Short Name", value: settings.short_name },
+      { metric: "Phone Number", value: settings.phone_number ?? "-" },
+      { metric: "Address", value: settings.address ?? "-" },
+      ...getSpecialSummaryItems(report).map((item) => ({ metric: item.label, value: item.value })),
+    ],
   );
 
   const trendSheet = XLSX.utils.json_to_sheet(
@@ -989,14 +1044,6 @@ export default function ReportsPage() {
   const [specialCustomFromInput, setSpecialCustomFromInput] = useState(formatDate(defaults.from));
   const [specialCustomToInput, setSpecialCustomToInput] = useState(formatDate(defaults.to));
   const [specialCustomGroupBy, setSpecialCustomGroupBy] = useState<GroupBy>(defaults.groupBy);
-
-  useEffect(() => {
-    setFromDisplayInput(formatDate(draftFilters.from));
-  }, [draftFilters.from]);
-
-  useEffect(() => {
-    setToDisplayInput(formatDate(draftFilters.to));
-  }, [draftFilters.to]);
 
   const isDraftRangeValid = useMemo(
     () => isDateRangeValid(draftFilters.from, draftFilters.to),
@@ -1292,6 +1339,8 @@ export default function ReportsPage() {
                 return;
               }
 
+              setFromDisplayInput(formatDate(parsed));
+
               setDraftFilters((prev) => ({
                 ...prev,
                 preset: "custom",
@@ -1318,6 +1367,8 @@ export default function ReportsPage() {
               if (!parsed) {
                 return;
               }
+
+              setToDisplayInput(formatDate(parsed));
 
               setDraftFilters((prev) => ({
                 ...prev,

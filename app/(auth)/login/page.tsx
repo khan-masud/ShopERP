@@ -6,9 +6,12 @@ import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import toast from "react-hot-toast";
 import { z } from "zod";
-import { ShieldCheck, Store } from "lucide-react";
+import { Store } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+
+const lowStockDismissKey = "shoperp.warning.dismiss.low";
+const outOfStockDismissKey = "shoperp.warning.dismiss.out";
 
 const loginSchema = z.object({
   email: z.string().email("Enter a valid email"),
@@ -72,6 +75,13 @@ export default function LoginPage() {
       return;
     }
 
+    try {
+      window.sessionStorage.removeItem(lowStockDismissKey);
+      window.sessionStorage.removeItem(outOfStockDismissKey);
+    } catch {
+      // Ignore storage cleanup failures.
+    }
+
     toast.success("Login successful");
 
     const next = new URLSearchParams(window.location.search).get("next");
@@ -81,8 +91,8 @@ export default function LoginPage() {
 
   if (isCheckingSession) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-100">
-        <div className="rounded-xl border border-slate-200 bg-white px-6 py-4 text-sm text-slate-600">
+      <div className="flex min-h-screen items-center justify-center bg-black">
+        <div className="rounded-xl border border-white/20 bg-white/5 px-6 py-4 text-sm text-slate-300 backdrop-blur-md">
           Checking secure session...
         </div>
       </div>
@@ -90,64 +100,82 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="grid min-h-screen bg-slate-100 lg:grid-cols-5">
-      <section className="relative hidden overflow-hidden bg-slate-950 lg:col-span-2 lg:block">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(37,99,235,0.35),transparent_45%),radial-gradient(circle_at_85%_70%,rgba(5,150,105,0.28),transparent_40%)]" />
-        <div className="relative flex h-full flex-col justify-between px-10 py-12 text-white">
-          <div className="space-y-3">
-            <p className="inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/10 px-3 py-1 text-xs">
-              <ShieldCheck size={14} />
-              Security First ERP Access
-            </p>
-            <h1 className="text-3xl font-semibold leading-tight">
-              ShopERP
-              <br />
-              Secure Operations Console
-            </h1>
-            <p className="max-w-md text-sm text-slate-200">
-              Protected login for admins and staff with audit-tracked sessions and real-time
-              retail workflows.
-            </p>
-          </div>
-          <div className="text-xs text-slate-300">Bangladesh Retail Edition</div>
+    <>
+      <style dangerouslySetInnerHTML={{
+        __html: `
+          @keyframes float-blob {
+            0% { transform: translate(0px, 0px) scale(1); }
+            33% { transform: translate(40px, -60px) scale(1.1); }
+            66% { transform: translate(-30px, 30px) scale(0.9); }
+            100% { transform: translate(0px, 0px) scale(1); }
+          }
+          .animate-float-blob {
+            animation: float-blob 10s infinite alternate ease-in-out;
+          }
+          .delay-2000 { animation-delay: 2s; }
+          .delay-4000 { animation-delay: 4s; }
+          .delay-6000 { animation-delay: 6s; }
+        `
+      }} />
+
+      <div className="relative flex h-screen min-h-screen items-center justify-center overflow-hidden bg-black p-6">
+        
+        {/* Animated Background Elements */}
+        <div className="pointer-events-none absolute inset-0">
+          <div className="animate-float-blob absolute -left-20 -top-20 h-96 w-96 rounded-full bg-blue-600/30 mix-blend-screen blur-[120px] filter"></div>
+          <div className="animate-float-blob delay-2000 absolute right-1/4 top-1/4 h-80 w-80 rounded-full bg-emerald-600/30 mix-blend-screen blur-[100px] filter"></div>
+          <div className="animate-float-blob delay-4000 absolute bottom-1/4 left-1/3 h-[500px] w-[500px] rounded-full bg-purple-600/30 mix-blend-screen blur-[150px] filter"></div>
+          <div className="animate-float-blob delay-6000 absolute left-1/4 top-1/2 h-72 w-72 rounded-full bg-rose-600/20 mix-blend-screen blur-[100px] filter"></div>
         </div>
-      </section>
 
-      <section className="flex items-center justify-center p-6 lg:col-span-3">
-        <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_20px_50px_rgba(15,23,42,0.08)]">
-          <div className="mb-6 flex items-center gap-3">
-            <div className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 text-blue-700">
-              <Store size={18} />
+        {/* Centered Login Form */}
+        <div className="relative z-10 w-full max-w-md rounded-[28px] border border-white/20 bg-white/95 p-8 shadow-[0_30px_60px_rgba(0,0,0,0.5)] backdrop-blur-2xl md:p-10">
+          <div className="mb-8 flex flex-col items-center text-center">
+            <div className="mb-6 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-xl ring-4 ring-slate-900/5">
+              <Store size={28} />
             </div>
-            <div>
-              <h2 className="text-xl font-semibold text-slate-900">Sign in to ShopERP</h2>
-              <p className="text-xs text-slate-500">Use your email and password to sign in</p>
-            </div>
+
+            <h1 className="text-2xl font-bold tracking-tight text-slate-950">Welcome to ShopERP</h1>
+            <p className="mt-2 text-sm text-slate-500">Secure Operations Console</p>
           </div>
 
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
             <Input
-              label="Email"
+              label="Email Address"
               type="email"
               autoComplete="email"
               placeholder="owner@example.com"
               error={errors.email?.message}
               {...register("email")}
             />
-            <Input
-              label="Password"
-              type="password"
-              autoComplete="current-password"
-              placeholder="********"
-              error={errors.password?.message}
-              {...register("password")}
-            />
-            <Button type="submit" className="w-full" size="lg" disabled={isSubmitting}>
-              {isSubmitting ? "Signing in..." : "Secure Login"}
+            <div className="space-y-1.5">
+              <Input
+                label="Password"
+                type="password"
+                autoComplete="current-password"
+                placeholder="••••••••"
+                error={errors.password?.message}
+                {...register("password")}
+              />
+            </div>
+            <Button type="submit" className="w-full bg-slate-950 py-3 text-sm hover:bg-slate-800" size="lg" disabled={isSubmitting}>
+              {isSubmitting ? "Authenticating..." : "Secure Login"}
             </Button>
           </form>
         </div>
-      </section>
-    </div>
+
+        <div className="pointer-events-none absolute inset-x-0 bottom-4 z-10 px-4 text-center text-xs text-slate-300">
+          Developed by{" "}
+          <a
+            href="https://facebook.com/abdullahalmasud.khan.1"
+            target="_blank"
+            rel="noreferrer"
+            className="pointer-events-auto font-medium text-blue-400 hover:text-blue-300 hover:underline"
+          >
+            Abdullah Al Masud
+          </a>
+        </div>
+      </div>
+    </>
   );
 }

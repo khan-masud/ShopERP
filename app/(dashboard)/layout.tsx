@@ -1,6 +1,7 @@
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { getUserPermissionMap } from "@/lib/server/permissions";
 import { requireUserForPage } from "@/lib/server/require-user";
+import { getSiteBranding } from "@/lib/server/site-settings";
 
 export default async function DashboardLayout({
   children,
@@ -8,7 +9,14 @@ export default async function DashboardLayout({
   children: React.ReactNode;
 }) {
   const user = await requireUserForPage();
-  const permissionMap = await getUserPermissionMap(user);
+  const [permissionMap, branding] = await Promise.all([
+    getUserPermissionMap(user),
+    getSiteBranding(),
+  ]);
 
-  return <DashboardShell user={user} permissionMap={permissionMap}>{children}</DashboardShell>;
+  return (
+    <DashboardShell user={user} permissionMap={permissionMap} branding={branding}>
+      {children}
+    </DashboardShell>
+  );
 }
