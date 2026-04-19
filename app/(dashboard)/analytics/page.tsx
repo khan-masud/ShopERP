@@ -414,13 +414,6 @@ export default function AnalyticsPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="text-2xl font-semibold text-slate-900">Business Analytics</h2>
-        <p className="text-sm text-slate-500">
-          Growth, trend, and performance visualization to track business momentum.
-        </p>
-      </div>
-
       <Card className="p-4">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <Input
