@@ -14,6 +14,7 @@ type AuditLogItem = {
   table_name: string | null;
   record_id: string | null;
   detail: string;
+  user_name: string | null;
   user_email: string | null;
   ip_address: string | null;
   created_at: string;
@@ -25,6 +26,11 @@ type AuditResponse = {
   page: number;
   page_size: number;
   total_pages: number;
+  filter_options: {
+    actions: string[];
+    tables: string[];
+    user_names: string[];
+  };
 };
 
 type ApiSuccess<T> = {
@@ -41,7 +47,7 @@ async function fetchAuditLogs(filters: {
   search: string;
   action: string;
   table: string;
-  userEmail: string;
+  userName: string;
   fromDate: string;
   toDate: string;
   page: number;
@@ -61,8 +67,8 @@ async function fetchAuditLogs(filters: {
     params.set("table", filters.table.trim());
   }
 
-  if (filters.userEmail.trim()) {
-    params.set("userEmail", filters.userEmail.trim());
+  if (filters.userName.trim()) {
+    params.set("userName", filters.userName.trim());
   }
 
   if (filters.fromDate) {
@@ -90,29 +96,59 @@ async function fetchAuditLogs(filters: {
   return payload.data;
 }
 
+function toApiDateInput(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const match = trimmed.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (!match) {
+    return "";
+  }
+
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+
+  const candidate = new Date(Date.UTC(year, month - 1, day));
+  if (
+    candidate.getUTCFullYear() !== year
+    || candidate.getUTCMonth() + 1 !== month
+    || candidate.getUTCDate() !== day
+  ) {
+    return "";
+  }
+
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 export default function AuditPage() {
   const [search, setSearch] = useState("");
   const [action, setAction] = useState("");
   const [table, setTable] = useState("");
-  const [userEmail, setUserEmail] = useState("");
+  const [userName, setUserName] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+
+  const fromDateApi = toApiDateInput(fromDate);
+  const toDateApi = toApiDateInput(toDate);
 
   const {
     data,
     isLoading,
     isError,
   } = useQuery({
-    queryKey: ["audit-logs", search, action, table, userEmail, fromDate, toDate, page, pageSize],
+    queryKey: ["audit-logs", search, action, table, userName, fromDateApi, toDateApi, page, pageSize],
     queryFn: () => fetchAuditLogs({
       search,
       action,
       table,
-      userEmail,
-      fromDate,
-      toDate,
+      userName,
+      fromDate: fromDateApi,
+      toDate: toDateApi,
       page,
       pageSize,
     }),
@@ -137,13 +173,12 @@ export default function AuditPage() {
     [logs],
   );
 
+  const actionOptions = data?.filter_options?.actions ?? [];
+  const tableOptions = data?.filter_options?.tables ?? [];
+  const userNameOptions = data?.filter_options?.user_names ?? [];
+
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="text-2xl font-semibold text-slate-900">Audit Logs</h2>
-        <p className="text-sm text-slate-500">Security and mutation trail across authentication and ERP modules</p>
-      </div>
-
       <Card className="p-4">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
           <Input
@@ -157,39 +192,67 @@ export default function AuditPage() {
             className="xl:col-span-2"
           />
 
-          <Input
-            label="Action"
-            placeholder="e.g. Sale Created"
-            value={action}
-            onChange={(event) => {
-              setAction(event.target.value);
-              setPage(1);
-            }}
-          />
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-slate-600">Action</span>
+            <select
+              className="h-10 rounded-lg border border-slate-300 px-3 text-sm"
+              value={action}
+              onChange={(event) => {
+                setAction(event.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">All Actions</option>
+              {actionOptions.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
 
-          <Input
-            label="Table"
-            placeholder="e.g. sales"
-            value={table}
-            onChange={(event) => {
-              setTable(event.target.value);
-              setPage(1);
-            }}
-          />
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-slate-600">Table</span>
+            <select
+              className="h-10 rounded-lg border border-slate-300 px-3 text-sm"
+              value={table}
+              onChange={(event) => {
+                setTable(event.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">All Tables</option>
+              {tableOptions.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
 
-          <Input
-            label="User Email"
-            placeholder="user@domain.com"
-            value={userEmail}
-            onChange={(event) => {
-              setUserEmail(event.target.value);
-              setPage(1);
-            }}
-          />
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-slate-600">User Name</span>
+            <select
+              className="h-10 rounded-lg border border-slate-300 px-3 text-sm"
+              value={userName}
+              onChange={(event) => {
+                setUserName(event.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">All Users</option>
+              {userNameOptions.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
 
           <Input
             label="From"
-            type="date"
+            type="text"
+            placeholder="DD-MM-YYYY"
             value={fromDate}
             onChange={(event) => {
               setFromDate(event.target.value);
@@ -199,7 +262,8 @@ export default function AuditPage() {
 
           <Input
             label="To"
-            type="date"
+            type="text"
+            placeholder="DD-MM-YYYY"
             value={toDate}
             onChange={(event) => {
               setToDate(event.target.value);
@@ -251,7 +315,11 @@ export default function AuditPage() {
                       <td className="px-3 py-2 font-medium text-slate-900">{log.action}</td>
                       <td className="px-3 py-2 text-slate-700">{log.table_name || "-"}</td>
                       <td className="px-3 py-2 text-xs text-slate-600">{log.record_id || "-"}</td>
-                      <td className="px-3 py-2 text-xs text-slate-700">{log.user_email || "System"}</td>
+                      <td className="px-3 py-2 text-xs text-slate-700">
+                        {log.user_name || log.user_email
+                          ? `${log.user_name || "Unknown"} (${log.user_email || "no-email"})`
+                          : "System"}
+                      </td>
                       <td className="px-3 py-2 text-xs text-slate-500">{log.ip_address || "-"}</td>
                       <td className="px-3 py-2 text-xs text-slate-600">{log.detail}</td>
                     </tr>

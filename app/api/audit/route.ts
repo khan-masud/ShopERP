@@ -14,6 +14,7 @@ interface AuditLogRow extends RowDataPacket {
   table_name: string | null;
   record_id: string | null;
   detail: string;
+  user_name: string | null;
   user_email: string | null;
   ip_address: string | null;
   created_at: Date;
@@ -21,6 +22,10 @@ interface AuditLogRow extends RowDataPacket {
 
 interface AuditCountRow extends RowDataPacket {
   total_count: number;
+}
+
+interface DistinctValueRow extends RowDataPacket {
+  value: string | null;
 }
 
 function parsePositiveInt(value: string | null, fallback: number, max: number) {
@@ -62,7 +67,7 @@ export async function GET(request: NextRequest) {
     const query = searchParams.get("q")?.trim() ?? "";
     const action = searchParams.get("action")?.trim() ?? "";
     const table = searchParams.get("table")?.trim() ?? "";
-    const userEmail = searchParams.get("userEmail")?.trim() ?? "";
+    const userName = searchParams.get("userName")?.trim() ?? "";
     const fromDate = searchParams.get("from")?.trim() ?? "";
     const toDate = searchParams.get("to")?.trim() ?? "";
 
@@ -104,9 +109,9 @@ export async function GET(request: NextRequest) {
       values.push(`%${table}%`);
     }
 
-    if (userEmail) {
-      conditions.push("l.user_email LIKE ?");
-      values.push(`%${userEmail}%`);
+    if (userName) {
+      conditions.push("u.name LIKE ?");
+      values.push(`%${userName}%`);
     }
 
     if (fromDate) {
@@ -121,7 +126,7 @@ export async function GET(request: NextRequest) {
 
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    const [logs, countRows] = await Promise.all([
+    const [logs, countRows, actionRows, tableRows, userNameRows] = await Promise.all([
       dbQuery<AuditLogRow[]>(
         `SELECT
            l.id,
@@ -129,10 +134,12 @@ export async function GET(request: NextRequest) {
            l.table_name,
            l.record_id,
            l.detail,
+           u.name AS user_name,
            l.user_email,
            l.ip_address,
            l.created_at
          FROM audit_logs l
+         LEFT JOIN users u ON u.id = l.user_id
          ${where}
          ORDER BY l.created_at DESC
          LIMIT ?
@@ -142,8 +149,31 @@ export async function GET(request: NextRequest) {
       dbQuery<AuditCountRow[]>(
         `SELECT COUNT(*) AS total_count
          FROM audit_logs l
+         LEFT JOIN users u ON u.id = l.user_id
          ${where}`,
         values,
+      ),
+      dbQuery<DistinctValueRow[]>(
+        `SELECT DISTINCT action AS value
+         FROM audit_logs
+         WHERE action IS NOT NULL AND action <> ''
+         ORDER BY action ASC
+         LIMIT 500`,
+      ),
+      dbQuery<DistinctValueRow[]>(
+        `SELECT DISTINCT table_name AS value
+         FROM audit_logs
+         WHERE table_name IS NOT NULL AND table_name <> ''
+         ORDER BY table_name ASC
+         LIMIT 500`,
+      ),
+      dbQuery<DistinctValueRow[]>(
+        `SELECT DISTINCT u.name AS value
+         FROM audit_logs l
+         INNER JOIN users u ON u.id = l.user_id
+         WHERE u.name IS NOT NULL AND u.name <> ''
+         ORDER BY u.name ASC
+         LIMIT 500`,
       ),
     ]);
 
@@ -156,6 +186,11 @@ export async function GET(request: NextRequest) {
       page,
       page_size: pageSize,
       total_pages: totalPages,
+      filter_options: {
+        actions: actionRows.map((row) => String(row.value ?? "")).filter(Boolean),
+        tables: tableRows.map((row) => String(row.value ?? "")).filter(Boolean),
+        user_names: userNameRows.map((row) => String(row.value ?? "")).filter(Boolean),
+      },
     });
   } catch (error) {
     return handleApiError(error);
