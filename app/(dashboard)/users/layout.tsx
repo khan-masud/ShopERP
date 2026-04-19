@@ -1,10 +1,10 @@
-import { guardAdminPage } from "@/lib/server/page-guards";
+import { guardModulePage } from "@/lib/server/page-guards";
 
 export default async function UsersLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  await guardAdminPage();
+  await guardModulePage("users", "view");
   return children;
 }

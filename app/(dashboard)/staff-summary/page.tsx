@@ -145,11 +145,6 @@ export default function StaffSummaryPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="text-2xl font-semibold text-slate-900">Staff Sales Summary</h2>
-        <p className="text-sm text-slate-500">Track who sold how much with day/week/month/year/all-time filters</p>
-      </div>
-
       <Card className="p-4">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <Input
@@ -160,7 +155,6 @@ export default function StaffSummaryPage() {
               setSearch(event.target.value);
               setPage(1);
             }}
-            className="xl:col-span-2"
           />
 
           <label className="flex flex-col gap-1.5">
@@ -181,23 +175,27 @@ export default function StaffSummaryPage() {
             </select>
           </label>
 
-          <label className="flex items-end gap-2 pb-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              checked={includeInactive}
-              onChange={(event) => {
-                setIncludeInactive(event.target.checked);
-                setPage(1);
-              }}
-              className="h-4 w-4 rounded border-slate-300 text-blue-600"
-            />
-            Include inactive staff
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-slate-600">Status Filter</span>
+            <span className="flex h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={includeInactive}
+                onChange={(event) => {
+                  setIncludeInactive(event.target.checked);
+                  setPage(1);
+                }}
+                className="h-4 w-4 rounded border-slate-300 text-blue-600"
+              />
+              Include inactive staff
+            </span>
           </label>
 
-          <div className="flex items-end justify-end">
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-transparent select-none">Action</span>
             <Button
-              size="sm"
               variant="secondary"
+              className="h-10 w-full"
               onClick={() => {
                 setSearch("");
                 setRange("month");

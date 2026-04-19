@@ -26,6 +26,20 @@ export type PermissionFlags = {
 
 export type UserPermissionMap = Record<ModuleKey, PermissionFlags>;
 
+const STAFF_DEFAULT_PERMISSION_MAP: UserPermissionMap = {
+  dashboard: { can_view: true, can_add: false, can_edit: false, can_delete: false },
+  products: { can_view: true, can_add: true, can_edit: false, can_delete: false },
+  customers: { can_view: true, can_add: false, can_edit: true, can_delete: false },
+  sales: { can_view: true, can_add: true, can_edit: true, can_delete: false },
+  reports: { can_view: false, can_add: false, can_edit: false, can_delete: false },
+  analytics: { can_view: false, can_add: false, can_edit: false, can_delete: false },
+  expenses: { can_view: false, can_add: false, can_edit: false, can_delete: false },
+  audit: { can_view: false, can_add: false, can_edit: false, can_delete: false },
+  stock: { can_view: true, can_add: false, can_edit: true, can_delete: false },
+  users: { can_view: false, can_add: false, can_edit: false, can_delete: false },
+  permissions: { can_view: false, can_add: false, can_edit: false, can_delete: false },
+};
+
 function isActionSupported(moduleKey: ModuleKey, action: PermissionAction) {
   const support = MODULE_ACTION_SUPPORT[moduleKey];
 
@@ -57,13 +71,10 @@ function buildFullAccessMap(): UserPermissionMap {
   }, {} as UserPermissionMap);
 }
 
-function buildNoAccessMap(): UserPermissionMap {
+function buildStaffDefaultMap(): UserPermissionMap {
   return MODULE_KEYS.reduce<UserPermissionMap>((acc, moduleKey) => {
     acc[moduleKey] = {
-      can_view: false,
-      can_add: false,
-      can_edit: false,
-      can_delete: false,
+      ...STAFF_DEFAULT_PERMISSION_MAP[moduleKey],
     };
 
     return acc;
@@ -81,7 +92,7 @@ export async function getUserPermissionMap(user: SessionUser): Promise<UserPermi
      WHERE role = 'staff'`,
   );
 
-  const permissions = buildNoAccessMap();
+  const permissions = buildStaffDefaultMap();
 
   for (const row of rows) {
     const moduleSupport = MODULE_ACTION_SUPPORT[row.module_key];
@@ -120,6 +131,24 @@ export async function assertPermission(
   );
 
   const row = rows[0];
+
+  if (!row) {
+    const fallback = STAFF_DEFAULT_PERMISSION_MAP[moduleKey];
+    const allowedByDefault =
+      action === "view"
+        ? fallback.can_view
+        : action === "add"
+          ? fallback.can_add
+          : action === "edit"
+            ? fallback.can_edit
+            : fallback.can_delete;
+
+    if (!allowedByDefault) {
+      throw new ApiError(403, `Permission denied for ${moduleKey}:${action}`);
+    }
+
+    return;
+  }
 
   const allowed =
     action === "view"

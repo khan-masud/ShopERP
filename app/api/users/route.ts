@@ -6,7 +6,8 @@ import { hashPassword } from "@/lib/server/auth";
 import { logAudit } from "@/lib/server/audit";
 import { dbQuery, withTransaction } from "@/lib/server/db";
 import { ApiError } from "@/lib/server/errors";
-import { requireUserFromRequest, type SessionUser } from "@/lib/server/require-user";
+import { assertPermission } from "@/lib/server/permissions";
+import { requireUserFromRequest } from "@/lib/server/require-user";
 import { handleApiError, jsonError, jsonOk } from "@/lib/server/response";
 
 type QueryParam = string | number | boolean | Date | null;
@@ -33,12 +34,6 @@ const createStaffUserSchema = z.object({
   phone: z.string().max(30).optional().nullable(),
   password: z.string().min(8).max(100),
 });
-
-function assertAdmin(user: SessionUser) {
-  if (user.role !== "admin") {
-    throw new ApiError(403, "Only admin can manage staff users");
-  }
-}
 
 function parsePositiveInt(value: string | null, fallback: number, max: number) {
   const parsed = Number(value ?? fallback);
@@ -72,7 +67,7 @@ function serializeUser(row: StaffUserRow) {
 export async function GET(request: NextRequest) {
   try {
     const user = await requireUserFromRequest(request);
-    assertAdmin(user);
+    await assertPermission(user, "users", "view");
 
     const { searchParams } = new URL(request.url);
     const query = searchParams.get("q")?.trim() ?? "";
@@ -146,7 +141,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const user = await requireUserFromRequest(request);
-    assertAdmin(user);
+    await assertPermission(user, "users", "add");
 
     const body = await request.json().catch(() => {
       throw new ApiError(400, "Invalid JSON body");

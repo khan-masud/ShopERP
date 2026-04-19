@@ -12,9 +12,11 @@ type ModuleKey =
   | "customers"
   | "sales"
   | "reports"
+  | "analytics"
   | "expenses"
   | "audit"
   | "stock"
+  | "users"
   | "permissions";
 
 type PermissionItem = {
@@ -59,9 +61,11 @@ const moduleLabelMap: Record<ModuleKey, string> = {
   customers: "Customers",
   sales: "Sales",
   reports: "Reports",
+  analytics: "Analytics",
   expenses: "Expenses",
   audit: "Audit Logs",
   stock: "Stock",
+  users: "Staff Users",
   permissions: "Permissions",
 };
 
@@ -71,10 +75,26 @@ const defaultActionSupport: ActionSupportMap = {
   customers: { can_view: true, can_add: false, can_edit: true, can_delete: false },
   sales: { can_view: true, can_add: true, can_edit: true, can_delete: false },
   reports: { can_view: true, can_add: false, can_edit: false, can_delete: false },
+  analytics: { can_view: true, can_add: false, can_edit: false, can_delete: false },
   expenses: { can_view: true, can_add: true, can_edit: true, can_delete: true },
   audit: { can_view: true, can_add: false, can_edit: false, can_delete: false },
   stock: { can_view: true, can_add: false, can_edit: true, can_delete: false },
+  users: { can_view: true, can_add: true, can_edit: true, can_delete: true },
   permissions: { can_view: false, can_add: false, can_edit: false, can_delete: false },
+};
+
+const defaultStaffPermissions: Record<ModuleKey, PermissionItem> = {
+  dashboard: { module_key: "dashboard", can_view: true, can_add: false, can_edit: false, can_delete: false },
+  products: { module_key: "products", can_view: true, can_add: true, can_edit: false, can_delete: false },
+  customers: { module_key: "customers", can_view: true, can_add: false, can_edit: true, can_delete: false },
+  sales: { module_key: "sales", can_view: true, can_add: true, can_edit: true, can_delete: false },
+  reports: { module_key: "reports", can_view: false, can_add: false, can_edit: false, can_delete: false },
+  analytics: { module_key: "analytics", can_view: false, can_add: false, can_edit: false, can_delete: false },
+  expenses: { module_key: "expenses", can_view: false, can_add: false, can_edit: false, can_delete: false },
+  audit: { module_key: "audit", can_view: false, can_add: false, can_edit: false, can_delete: false },
+  stock: { module_key: "stock", can_view: true, can_add: false, can_edit: true, can_delete: false },
+  users: { module_key: "users", can_view: false, can_add: false, can_edit: false, can_delete: false },
+  permissions: { module_key: "permissions", can_view: false, can_add: false, can_edit: false, can_delete: false },
 };
 
 async function fetchPermissions() {
@@ -98,9 +118,11 @@ function sortPermissions(permissions: PermissionItem[]) {
     "customers",
     "sales",
     "reports",
+    "analytics",
     "expenses",
     "audit",
     "stock",
+    "users",
     "permissions",
   ];
 
@@ -271,22 +293,28 @@ export default function PermissionsPage() {
     });
   }
 
+  function resetToDefaultPermissions() {
+    setDraftPermissions(
+      sortPermissions(
+        originalPermissions.map((item) => {
+          const fallback = defaultStaffPermissions[item.module_key];
+          const support = actionSupport[item.module_key] ?? defaultActionSupport[item.module_key];
+          const canView = support.can_view && fallback.can_view;
+
+          return {
+            module_key: item.module_key,
+            can_view: canView,
+            can_add: canView && support.can_add && fallback.can_add,
+            can_edit: canView && support.can_edit && fallback.can_edit,
+            can_delete: canView && support.can_delete && fallback.can_delete,
+          };
+        }),
+      ),
+    );
+  }
+
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="text-2xl font-semibold text-slate-900">Permission Management</h2>
-        <p className="text-sm text-slate-500">Configure staff view/add/edit/delete access for each module</p>
-      </div>
-
-      <Card className="p-4 text-sm text-slate-700">
-        <p>
-          Only admin can access this screen. Changes are applied to the <span className="font-semibold">staff</span> role.
-        </p>
-        <p className="mt-2 text-xs text-slate-500">
-          Customers module <span className="font-semibold">Edit</span> permission controls CRM customer update and due collection actions.
-        </p>
-      </Card>
-
       {isLoading ? <Card className="p-5 text-sm text-slate-500">Loading permission matrix...</Card> : null}
 
       {isError ? (
@@ -340,6 +368,14 @@ export default function PermissionsPage() {
                 disabled={!hasChanges || saveMutation.isPending}
               >
                 Reset
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={resetToDefaultPermissions}
+                disabled={saveMutation.isPending || originalPermissions.length === 0}
+              >
+                Reset to Default
               </Button>
               <Button
                 size="sm"

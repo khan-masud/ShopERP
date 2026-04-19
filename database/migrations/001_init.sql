@@ -365,10 +365,11 @@ DEALLOCATE PREPARE customers_note_stmt;
 INSERT INTO role_permissions (role, module_key, can_view, can_add, can_edit, can_delete)
 VALUES
 ('staff', 'dashboard', 1, 0, 0, 0),
-('staff', 'products', 1, 0, 0, 0),
+('staff', 'products', 1, 1, 0, 0),
 ('staff', 'customers', 1, 0, 1, 0),
 ('staff', 'sales', 1, 1, 1, 0),
 ('staff', 'reports', 0, 0, 0, 0),
+('staff', 'analytics', 0, 0, 0, 0),
 ('staff', 'expenses', 0, 0, 0, 0),
 ('staff', 'audit', 0, 0, 0, 0),
 ('staff', 'stock', 1, 0, 1, 0),

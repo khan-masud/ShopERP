@@ -5,6 +5,6 @@ export default async function AnalyticsLayout({
 }: {
   children: React.ReactNode;
 }) {
-  await guardModulePage("reports", "view");
+  await guardModulePage("analytics", "view");
   return children;
 }

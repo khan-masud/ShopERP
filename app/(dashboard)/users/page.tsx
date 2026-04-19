@@ -85,6 +85,12 @@ export default function StaffUsersPage() {
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
 
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+
   const {
     data,
     isLoading,
@@ -183,17 +189,99 @@ export default function StaffUsersPage() {
     },
   });
 
+  const editMutation = useMutation({
+    mutationFn: async () => {
+      if (!editingUserId) {
+        throw new Error("No staff user selected");
+      }
+
+      if (!editName.trim()) {
+        throw new Error("Name is required");
+      }
+
+      if (!editEmail.trim()) {
+        throw new Error("Email is required");
+      }
+
+      const res = await fetch(`/api/users/${editingUserId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: editName.trim(),
+          email: editEmail.trim(),
+          phone: editPhone.trim() || null,
+        }),
+      });
+
+      const payload = (await res.json()) as ApiSuccess<{ user: StaffUser }> | ApiErrorPayload;
+
+      if (!res.ok || !payload.success) {
+        throw new Error((payload as ApiErrorPayload).message ?? "Failed to update staff user");
+      }
+    },
+    onSuccess: async () => {
+      toast.success("Staff user updated");
+      closeEditModal();
+      await queryClient.invalidateQueries({ queryKey: ["staff-users"] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (staffUser: StaffUser) => {
+      const res = await fetch(`/api/users/${staffUser.id}`, {
+        method: "DELETE",
+      });
+
+      const payload = (await res.json()) as ApiSuccess<{ user: StaffUser }> | ApiErrorPayload;
+
+      if (!res.ok || !payload.success) {
+        throw new Error((payload as ApiErrorPayload).message ?? "Failed to delete staff user");
+      }
+    },
+    onSuccess: async () => {
+      toast.success("Staff user deleted");
+      await queryClient.invalidateQueries({ queryKey: ["staff-users"] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+
+  function openEditModal(staffUser: StaffUser) {
+    setEditingUserId(staffUser.id);
+    setEditName(staffUser.name);
+    setEditEmail(staffUser.email);
+    setEditPhone(staffUser.phone ?? "");
+    setIsEditModalOpen(true);
+  }
+
+  function closeEditModal() {
+    setIsEditModalOpen(false);
+    setEditingUserId(null);
+    setEditName("");
+    setEditEmail("");
+    setEditPhone("");
+  }
+
+  function confirmDeleteUser(staffUser: StaffUser) {
+    const confirmed = window.confirm(
+      `Delete staff user \"${staffUser.name}\" (${staffUser.email})? This action cannot be undone.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    deleteMutation.mutate(staffUser);
+  }
+
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="text-2xl font-semibold text-slate-900">Staff User Management</h2>
-        <p className="text-sm text-slate-500">Create staff accounts and control activation status</p>
-      </div>
-
-      <Card className="p-4 text-sm text-slate-700">
-        Only admin can access this screen. New users are created with the <span className="font-semibold">staff</span> role.
-      </Card>
-
       <Card className="p-4">
         <h3 className="text-sm font-semibold text-slate-900">Create Staff User</h3>
 
@@ -224,8 +312,9 @@ export default function StaffUsersPage() {
             onChange={(event) => setPassword(event.target.value)}
             placeholder="Minimum 8 chars"
           />
-          <div className="flex items-end justify-end">
-            <Button onClick={() => createMutation.mutate()} disabled={createMutation.isPending}>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-transparent select-none">Action</span>
+            <Button className="w-full" onClick={() => createMutation.mutate()} disabled={createMutation.isPending}>
               {createMutation.isPending ? "Creating..." : "Create Staff"}
             </Button>
           </div>
@@ -239,6 +328,7 @@ export default function StaffUsersPage() {
 
         <div className="grid gap-3 border-b border-slate-200 px-4 py-3 md:grid-cols-3">
           <Input
+            label="Search"
             placeholder="Search by name/email/phone"
             value={search}
             onChange={(event) => {
@@ -247,23 +337,27 @@ export default function StaffUsersPage() {
             }}
           />
 
-          <label className="flex items-end gap-2 pb-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              checked={includeInactive}
-              onChange={(event) => {
-                setIncludeInactive(event.target.checked);
-                setPage(1);
-              }}
-              className="h-4 w-4 rounded border-slate-300 text-blue-600"
-            />
-            Include inactive users
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-slate-600">Status Filter</span>
+            <span className="flex h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={includeInactive}
+                onChange={(event) => {
+                  setIncludeInactive(event.target.checked);
+                  setPage(1);
+                }}
+                className="h-4 w-4 rounded border-slate-300 text-blue-600"
+              />
+              Include inactive users
+            </span>
           </label>
 
-          <div className="flex items-end justify-end">
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-transparent select-none">Action</span>
             <Button
-              size="sm"
               variant="secondary"
+              className="h-10 w-full"
               onClick={() => {
                 setSearch("");
                 setIncludeInactive(true);
@@ -323,14 +417,41 @@ export default function StaffUsersPage() {
                       </td>
                       <td className="px-3 py-2 text-xs text-slate-500">{formatDateTime(user.created_at)}</td>
                       <td className="px-3 py-2 text-right">
-                        <Button
-                          size="sm"
-                          variant={user.is_active ? "danger" : "secondary"}
-                          disabled={toggleStatusMutation.isPending}
-                          onClick={() => toggleStatusMutation.mutate(user)}
-                        >
-                          {user.is_active ? "Deactivate" : "Activate"}
-                        </Button>
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            className="min-w-20"
+                            disabled={
+                              toggleStatusMutation.isPending || editMutation.isPending || deleteMutation.isPending
+                            }
+                            onClick={() => openEditModal(user)}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            className="min-w-20"
+                            disabled={
+                              toggleStatusMutation.isPending || editMutation.isPending || deleteMutation.isPending
+                            }
+                            onClick={() => confirmDeleteUser(user)}
+                          >
+                            Delete
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={user.is_active ? "secondary" : "primary"}
+                            className="min-w-24"
+                            disabled={
+                              toggleStatusMutation.isPending || editMutation.isPending || deleteMutation.isPending
+                            }
+                            onClick={() => toggleStatusMutation.mutate(user)}
+                          >
+                            {user.is_active ? "Deactivate" : "Activate"}
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -389,6 +510,52 @@ export default function StaffUsersPage() {
           </div>
         ) : null}
       </Card>
+
+      {isEditModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <Card className="w-full max-w-3xl p-4">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-slate-900">Edit Staff User</h3>
+              <Button variant="ghost" size="sm" onClick={closeEditModal} disabled={editMutation.isPending}>
+                Close
+              </Button>
+            </div>
+
+            <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <Input
+                label="Name"
+                value={editName}
+                onChange={(event) => setEditName(event.target.value)}
+                placeholder="Staff name"
+              />
+              <Input
+                label="Email"
+                type="email"
+                value={editEmail}
+                onChange={(event) => setEditEmail(event.target.value)}
+                placeholder="staff@domain.com"
+              />
+              <Input
+                label="Phone"
+                value={editPhone}
+                onChange={(event) => setEditPhone(event.target.value)}
+                placeholder="Optional"
+              />
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs font-medium text-transparent select-none">Action</span>
+                <div className="flex items-center gap-2">
+                  <Button className="w-full" onClick={() => editMutation.mutate()} disabled={editMutation.isPending}>
+                    {editMutation.isPending ? "Saving..." : "Save"}
+                  </Button>
+                  <Button variant="ghost" onClick={closeEditModal} disabled={editMutation.isPending}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </Card>
+        </div>
+      ) : null}
     </div>
   );
 }

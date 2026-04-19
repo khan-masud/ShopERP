@@ -7,9 +7,11 @@ export const MODULE_KEYS = [
   "customers",
   "sales",
   "reports",
+  "analytics",
   "expenses",
   "audit",
   "stock",
+  "users",
   "permissions",
 ] as const;
 
@@ -55,6 +57,12 @@ export const MODULE_ACTION_SUPPORT: Record<ModuleKey, ModuleActionSupport> = {
     can_edit: false,
     can_delete: false,
   },
+  analytics: {
+    can_view: true,
+    can_add: false,
+    can_edit: false,
+    can_delete: false,
+  },
   expenses: {
     can_view: true,
     can_add: true,
@@ -72,6 +80,12 @@ export const MODULE_ACTION_SUPPORT: Record<ModuleKey, ModuleActionSupport> = {
     can_add: false,
     can_edit: true,
     can_delete: false,
+  },
+  users: {
+    can_view: true,
+    can_add: true,
+    can_edit: true,
+    can_delete: true,
   },
   permissions: {
     can_view: false,
